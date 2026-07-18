@@ -14,6 +14,7 @@ pub struct ToolbarResponse {
     pub load_list_clicked: bool,
     pub steamcmd_clicked: bool,
     pub workshop_clicked: bool,
+    pub logs_clicked: bool,
 }
 
 /// Отрисовывает панель инструментов и возвращает информацию о нажатых кнопках.
@@ -130,6 +131,19 @@ pub fn show_toolbar(ui: &mut Ui, _mods: &[ModEntry]) -> ToolbarResponse {
             .clicked()
         {
             resp.workshop_clicked = true;
+        }
+
+        let logs_btn = Button::new(
+            RichText::new("📜 Логи").color(theme::WARNING_AMBER).size(12.0),
+        )
+        .fill(theme::BG_ROW_EVEN)
+        .stroke(egui::Stroke::new(1.0, theme::WARNING_AMBER.gamma_multiply(0.4)));
+
+        if ui.add(logs_btn)
+            .on_hover_text("Анализ Player.log: ошибки и предполагаемые моды-виновники")
+            .clicked()
+        {
+            resp.logs_clicked = true;
         }
 
         ui.add_space(4.0);
