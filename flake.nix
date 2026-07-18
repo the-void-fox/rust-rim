@@ -39,8 +39,26 @@
           src = nixpkgs.lib.cleanSource self;
           cargoLock.lockFile = ./Cargo.lock;
 
-          nativeBuildInputs = with pkgs; [ pkg-config makeWrapper ];
+          # Добавляем copyDesktopItems для автоматической установки ярлыка
+          nativeBuildInputs = with pkgs; [ pkg-config makeWrapper copyDesktopItems ];
           buildInputs = runtimeLibs pkgs ++ [ pkgs.gtk3 pkgs.glib ];
+
+          # Генерация .desktop файла
+          desktopItems = [
+            (pkgs.makeDesktopItem {
+              name = "rust-rim";
+              exec = "rust-rim";
+              icon = "rust-rim"; # Должно совпадать с именем файла в share/pixmaps
+              desktopName = "RustRim";
+              comment = "Быстрый менеджер модов RimWorld";
+              categories = [ "Game" "Utility" ];
+            })
+          ];
+
+          # Копируем иконку в системную директорию
+          postInstall = ''
+            install -Dm644 src/assetc/icon.png $out/share/pixmaps/rust-rim.png
+          '';
 
           # GUI-приложению нужны рантайм-библиотеки в LD_LIBRARY_PATH
           postFixup = ''
