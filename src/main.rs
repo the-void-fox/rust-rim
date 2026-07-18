@@ -1,12 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod app;
-mod mod_data;
-mod sorting;
-mod steam;
-mod ui;
-
-use app::RustRim;
+use rust_rim::app::RustRim;
 
 fn main() -> eframe::Result<()> {
     tracing_subscriber::fmt()

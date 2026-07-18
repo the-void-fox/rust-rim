@@ -5,6 +5,7 @@ use crate::sorting::CommunityRules;
 use crate::ui::{toolbar, mod_list::ModList, dialogs};
 use crate::ui::steamcmd_panel::SteamCmdPanel;
 use crate::ui::workshop_browser::WorkshopBrowser;
+use crate::ui::log_panel::LogPanel;
 use crate::steam::steamcmd;
 
 // ─── Цветовая палитра ────────────────────────────────────────────────────────
@@ -68,6 +69,9 @@ pub struct AppSettings {
     pub steamcmd_max_processes: usize,
     /// Минимальное число модов для активации мульти-загрузки.
     pub steamcmd_multi_threshold: usize,
+    /// Путь к Player.log для анализатора логов (пустой — автопоиск).
+    #[serde(default)]
+    pub log_file_path: String,
     #[serde(skip)]
     pub active_tab: SettingsTab,
 }
@@ -87,6 +91,7 @@ impl Default for AppSettings {
             steamcmd_multi_download: true,
             steamcmd_max_processes: 2,
             steamcmd_multi_threshold: 10,
+            log_file_path: String::new(),
             active_tab: SettingsTab::default(),
         }
     }
@@ -152,6 +157,98 @@ pub struct SearchState {
     pub active_query: String,
 }
 
+// ─── Кэши списков ────────────────────────────────────────────────────────────
+// Фильтрация и анализ зависимостей стоят O(mods × deps) — считать это каждый
+// кадр нельзя (на 2000 модов старый код делал тысячи to_lowercase() за кадр).
+// Кэш пересчитывается только когда изменился список модов (invalidate())
+// или текст поиска.
+
+/// Предвычисленные флаги предупреждений для одного мода (индекс = индекс в mods).
+#[derive(Clone, Copy, Default)]
+pub struct RowWarn {
+    pub missing_deps: bool,
+    pub incompat: bool,
+}
+
+pub struct ListCaches {
+    /// Ключ поиска: lowercase "название\npackage_id" (индекс = индекс в mods).
+    keys: Vec<String>,
+    pub warn: Vec<RowWarn>,
+    pub inactive: Vec<usize>,
+    pub active: Vec<usize>,
+    last_inactive_q: String,
+    last_active_q: String,
+    mods_dirty: bool,
+}
+
+impl Default for ListCaches {
+    fn default() -> Self {
+        Self {
+            keys: Vec::new(),
+            warn: Vec::new(),
+            inactive: Vec::new(),
+            active: Vec::new(),
+            last_inactive_q: String::new(),
+            last_active_q: String::new(),
+            mods_dirty: true,
+        }
+    }
+}
+
+impl ListCaches {
+    pub fn invalidate(&mut self) {
+        self.mods_dirty = true;
+    }
+
+    pub fn refresh(&mut self, mods: &[ModEntry], search: &SearchState) {
+        let mods_changed = self.mods_dirty;
+        if mods_changed {
+            self.mods_dirty = false;
+
+            self.keys.clear();
+            self.keys.extend(mods.iter().map(|m| {
+                let mut k = m.name.to_lowercase();
+                k.push('\n');
+                k.push_str(&m.package_id.to_lowercase());
+                k
+            }));
+
+            let active_ids: std::collections::HashSet<&str> = mods.iter()
+                .filter(|m| m.is_active)
+                .map(|m| m.package_id.as_str())
+                .collect();
+            self.warn.clear();
+            self.warn.extend(mods.iter().map(|m| RowWarn {
+                missing_deps: m.dependencies.iter().any(|d| !active_ids.contains(d.as_str())),
+                incompat: m.is_active
+                    && m.incompatible_with.iter().any(|ic| active_ids.contains(ic.as_str())),
+            }));
+        }
+
+        if mods_changed || search.inactive_query != self.last_inactive_q {
+            self.last_inactive_q = search.inactive_query.clone();
+            let q = search.inactive_query.to_lowercase();
+            self.inactive.clear();
+            self.inactive.extend(
+                mods.iter().enumerate()
+                    .filter(|(i, m)| !m.is_active && (q.is_empty() || self.keys[*i].contains(&q)))
+                    .map(|(i, _)| i),
+            );
+        }
+
+        if mods_changed || search.active_query != self.last_active_q {
+            self.last_active_q = search.active_query.clone();
+            let q = search.active_query.to_lowercase();
+            self.active.clear();
+            self.active.extend(
+                mods.iter().enumerate()
+                    .filter(|(i, m)| m.is_active && (q.is_empty() || self.keys[*i].contains(&q)))
+                    .map(|(i, _)| i),
+            );
+        }
+    }
+}
+
 // ─── Асинхронная загрузка превью ─────────────────────────────────────────────
 enum PreviewState {
     Idle,
@@ -210,6 +307,16 @@ pub struct RustRim {
     /// Браузер Steam Workshop.
     workshop_browser: WorkshopBrowser,
     show_workshop_browser: bool,
+
+    /// Анализатор логов RimWorld.
+    log_panel: LogPanel,
+    show_log_panel: bool,
+
+    /// Кэш Markdown-рендерера описаний модов.
+    md_cache: egui_commonmark::CommonMarkCache,
+
+    /// Кэши фильтрации/предупреждений списков (см. ListCaches).
+    caches: ListCaches,
 }
 
 impl Default for RustRim {
@@ -239,6 +346,10 @@ impl RustRim {
             show_steamcmd_panel: false,
             workshop_browser: WorkshopBrowser::new(),
             show_workshop_browser: false,
+            log_panel: LogPanel::new(),
+            show_log_panel: false,
+            md_cache: egui_commonmark::CommonMarkCache::default(),
+            caches: ListCaches::default(),
             settings,
         };
         if has_paths {
@@ -278,6 +389,9 @@ impl RustRim {
                 }
             }
         }
+        if activated > 0 {
+            self.caches.invalidate();
+        }
         activated
     }
 
@@ -292,7 +406,7 @@ impl eframe::App for RustRim {
         // ── Тулбар ──────────────────────────────────────────────────────────
         let toolbar_resp = egui::Panel::top("toolbar_panel")
             .frame(Frame::NONE.fill(theme::BG_HEADER).inner_margin(Margin::symmetric(8, 6)))
-            .show_inside(ui, |ui| toolbar::show_toolbar(ui, &self.mods))
+            .show(ui, |ui| toolbar::show_toolbar(ui, &self.mods))
             .inner;
 
         if toolbar_resp.save_clicked     { self.show_save_dialog = true; }
@@ -304,11 +418,12 @@ impl eframe::App for RustRim {
         if toolbar_resp.load_list_clicked { self.import_mod_list(); }
         if toolbar_resp.steamcmd_clicked  { self.show_steamcmd_panel = true; }
         if toolbar_resp.workshop_clicked   { self.show_workshop_browser = true; }
+        if toolbar_resp.logs_clicked       { self.show_log_panel = true; }
 
         // ── Строка состояния ─────────────────────────────────────────────────
         egui::Panel::bottom("status_bar")
             .frame(Frame::NONE.fill(theme::BG_HEADER).inner_margin(Margin::symmetric(10, 4)))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 let active_count = self.mods.iter().filter(|m| m.is_active).count();
                 let total = self.mods.len();
                 ui.horizontal(|ui| {
@@ -325,22 +440,10 @@ impl eframe::App for RustRim {
                 });
             });
 
-        // ── Подготовка индексов списков (нужны и для клавиатуры, и для UI) ──
-        let inactive_indices: Vec<usize> = self.mods.iter().enumerate()
-            .filter(|(_, m)| !m.is_active
-                && (self.search.inactive_query.is_empty()
-                    || m.name.to_lowercase().contains(&self.search.inactive_query.to_lowercase())
-                    || m.package_id.to_lowercase().contains(&self.search.inactive_query.to_lowercase())))
-            .map(|(i, _)| i)
-            .collect();
-
-        let active_indices: Vec<usize> = self.mods.iter().enumerate()
-            .filter(|(_, m)| m.is_active
-                && (self.search.active_query.is_empty()
-                    || m.name.to_lowercase().contains(&self.search.active_query.to_lowercase())
-                    || m.package_id.to_lowercase().contains(&self.search.active_query.to_lowercase())))
-            .map(|(i, _)| i)
-            .collect();
+        // ── Индексы списков из кэша (пересчёт только при изменениях) ─────────
+        self.caches.refresh(&self.mods, &self.search);
+        let inactive_indices = self.caches.inactive.clone();
+        let active_indices   = self.caches.active.clone();
 
         // ── Клавиатурная навигация (стрелки / Enter) ─────────────────────────
         let mut pending_req: Option<MoveRequest> = self.handle_keyboard_nav(&ctx, &inactive_indices, &active_indices);
@@ -358,7 +461,7 @@ impl eframe::App for RustRim {
                     .stroke(Stroke::new(1.0, theme::BORDER_ACCENT))
                     .inner_margin(Margin::symmetric(10, 5))
             )
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 Frame::NONE
                     .fill(theme::BG_HEADER)
                     .inner_margin(Margin::symmetric(10, 7))
@@ -423,13 +526,13 @@ impl eframe::App for RustRim {
 
                 let selected_mod = selected_mod_idx.and_then(|i| self.mods.get(i));
                 let preview_tex  = self.preview_state.texture();
-                show_mod_details(ui, selected_mod, preview_tex);
+                show_mod_details(ui, selected_mod, preview_tex, &mut self.md_cache);
             });
 
         // ── Центральная область: два списка ──────────────────────────────────
         egui::CentralPanel::default()
             .frame(Frame::NONE.fill(theme::BG_DARK))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 ui.columns(2, |cols| {
                 // Левая колонка — неактивные
                 Frame::NONE
@@ -441,7 +544,7 @@ impl eframe::App for RustRim {
                         ui.add_space(2.0);
                         show_search_bar(ui, &mut self.search.inactive_query, "inactive_search");
                         ui.add_space(2.0);
-                        if let Some(req) = ModList::new(&mut self.mods, &inactive_indices, &mut self.selected, false).show(ui) {
+                        if let Some(req) = ModList::new(&self.mods, &inactive_indices, &self.caches.warn, &mut self.selected, false).show(ui) {
                             pending_req = Some(req);
                         }
                     });
@@ -456,7 +559,7 @@ impl eframe::App for RustRim {
                         ui.add_space(2.0);
                         show_search_bar(ui, &mut self.search.active_query, "active_search");
                         ui.add_space(2.0);
-                        if let Some(req) = ModList::new(&mut self.mods, &active_indices, &mut self.selected, true).show(ui) {
+                        if let Some(req) = ModList::new(&self.mods, &active_indices, &self.caches.warn, &mut self.selected, true).show(ui) {
                             pending_req = Some(req);
                         }
                     });
@@ -545,6 +648,22 @@ impl eframe::App for RustRim {
             if let Some(ids) = self.workshop_browser.show(&ctx, &mut self.show_workshop_browser, &installed_ids) {
                 self.steamcmd_panel.add_ids(&ids);
                 self.show_steamcmd_panel = true;
+            }
+        }
+
+        // ── Анализ логов ─────────────────────────────────────────────────────
+        if self.show_log_panel {
+            let path_before = self.settings.log_file_path.clone();
+            let picked = self.log_panel.show(
+                &ctx, &mut self.show_log_panel, &self.mods, &mut self.settings.log_file_path);
+            if self.settings.log_file_path != path_before {
+                self.settings.save();
+            }
+            // Клик по подозреваемому — выделяем мод в списке
+            if let Some(pid) = picked {
+                if let Some(i) = self.mods.iter().position(|m| m.package_id == pid) {
+                    self.selected = Some(i);
+                }
             }
         }
 
@@ -663,6 +782,7 @@ impl RustRim {
         self.mods = all_mods;
         self.selected = None;
         self.preview_state = PreviewState::Idle;
+        self.caches.invalidate();
         self.apply_mods_config();
         self.check_duplicates();
     }
@@ -734,6 +854,7 @@ impl RustRim {
         self.last_removed_count = removed_count;
         self.selected = None;
         self.duplicates.clear();
+        self.caches.invalidate();
     }
 
     /// Читает ModsConfig.xml и помечает соответствующие моды активными в правильном порядке.
@@ -813,6 +934,7 @@ impl RustRim {
         });
 
         self.selected = None;
+        self.caches.invalidate();
     }
 
     /// Активирует только Core, все остальные деактивирует.
@@ -828,6 +950,7 @@ impl RustRim {
             }
         });
         self.selected = None;
+        self.caches.invalidate();
     }
 
     /// Записывает текущий порядок активных модов в ModsConfig.xml.
@@ -907,24 +1030,25 @@ impl RustRim {
         };
 
         crate::sorting::sort_active_mods(&mut self.mods, rules);
+        self.caches.invalidate();
     }
 
     fn activate_all(&mut self) {
         for m in &mut self.mods { m.is_active = true; }
+        self.caches.invalidate();
     }
 
     fn deactivate_all(&mut self) {
         for m in &mut self.mods {
             if m.source != ModSource::Core { m.is_active = false; }
         }
+        self.caches.invalidate();
     }
 
     fn count_warnings(&self) -> usize {
-        let active_ids: std::collections::HashSet<&str> = self.mods.iter()
-            .filter(|m| m.is_active).map(|m| m.package_id.as_str()).collect();
-        self.mods.iter()
-            .filter(|m| m.is_active)
-            .filter(|m| m.dependencies.iter().any(|d| !active_ids.contains(d.as_str())))
+        // Из кэша: warn[i] соответствует mods[i] (refresh() уже вызван в ui()).
+        self.mods.iter().zip(self.caches.warn.iter())
+            .filter(|(m, w)| m.is_active && w.missing_deps)
             .count()
     }
 
@@ -1042,6 +1166,7 @@ impl RustRim {
     }
 
     fn handle_move_request(&mut self, req: MoveRequest) {
+        self.caches.invalidate();
         match req {
             MoveRequest::Activate(orig_idx) => {
                 if orig_idx < self.mods.len() { self.mods[orig_idx].is_active = true; }
@@ -1145,6 +1270,7 @@ fn show_mod_details(
     ui: &mut egui::Ui,
     mod_entry: Option<&ModEntry>,
     preview_tex: Option<&egui::TextureHandle>,
+    md_cache: &mut egui_commonmark::CommonMarkCache,
 ) {
     match mod_entry {
         None => {
@@ -1231,9 +1357,15 @@ fn show_mod_details(
                         ui.label(RichText::new("ОПИСАНИЕ")
                             .color(theme::TEXT_MUTED).size(10.0).strong());
                         ui.add_space(4.0);
-                        ui.add(egui::Label::new(
-                            RichText::new(&m.description).color(theme::TEXT_PRIMARY).size(11.5)
-                        ).wrap());
+                        let desc = clean_unity_tags(&m.description);
+                        if looks_like_markdown(&desc) {
+                            egui_commonmark::CommonMarkViewer::new()
+                                .show(ui, md_cache, &desc);
+                        } else {
+                            ui.add(egui::Label::new(
+                                RichText::new(desc).color(theme::TEXT_PRIMARY).size(11.5)
+                            ).wrap());
+                        }
                     }
 
                     // ── Зависимости и несовместимости ────────────────────
@@ -1421,4 +1553,46 @@ pub fn apply_theme(ctx: &egui::Context) {
     style.spacing.button_padding = Vec2::new(8.0, 4.0);
 
     ctx.set_global_style(style);
+}
+// ─── Описания модов: Markdown ────────────────────────────────────────────────
+
+/// Переводит Unity rich-text теги RimWorld (`<b>`, `<i>`, `<color=…>`, `<size=…>`)
+/// в Markdown-эквиваленты, чтобы описание не показывало сырые теги.
+fn clean_unity_tags(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('<') {
+        out.push_str(&rest[..open]);
+        let tail = &rest[open..];
+        let Some(close) = tail.find('>') else {
+            out.push_str(tail);
+            break;
+        };
+        let tag = &tail[1..close]; // содержимое между < и >
+        let lower = tag.to_ascii_lowercase();
+        match lower.as_str() {
+            "b" | "/b"   => out.push_str("**"),
+            "i" | "/i"   => out.push_str("*"),
+            "/color" | "/size" => {}
+            _ if lower.starts_with("color=") || lower.starts_with("size=") => {}
+            // Не тег форматирования (например "x < y") — оставляем как есть
+            _ => out.push_str(&tail[..close + 1]),
+        }
+        rest = &tail[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Эвристика: похоже ли описание на Markdown. Обычный текст рендерим как раньше,
+/// чтобы одиночные переводы строк не склеивались в параграфы.
+fn looks_like_markdown(text: &str) -> bool {
+    if text.contains("**") || text.contains("](") || text.contains('`') {
+        return true;
+    }
+    text.lines().any(|l| {
+        let t = l.trim_start();
+        t.starts_with("# ") || t.starts_with("## ") || t.starts_with("### ")
+            || t.starts_with("- ") || t.starts_with("* ") || t.starts_with("> ")
+    })
 }
