@@ -1,7 +1,7 @@
 use std::path::Path;
 use anyhow::{Context, Result};
 use quick_xml::Reader;
-use quick_xml::events::Event;
+use quick_xml::events::{BytesRef, Event};
 
 // ─── About.xml ───────────────────────────────────────────────────────────────
 
@@ -18,14 +18,35 @@ pub struct AboutData {
     pub incompatible_with: Vec<String>,
 }
 
+// quick-xml ≥0.38 отдаёт `&amp;` и прочие ссылки отдельным событием GeneralRef,
+// а текст вокруг них — отдельными Text. Поэтому текст элемента накапливается
+// в буфере и обрабатывается на закрывающем теге, иначе "Cats &amp; Dogs"
+// распался бы на три куска.
+
+/// Разворачивает ссылку на сущность (`&amp;`, `&#1080;`, ...) в текст.
+fn resolve_ref(e: &BytesRef) -> String {
+    if let Ok(Some(ch)) = e.resolve_char_ref() {
+        return ch.to_string();
+    }
+    match e.decode().as_deref() {
+        Ok("amp")  => "&",
+        Ok("lt")   => "<",
+        Ok("gt")   => ">",
+        Ok("quot") => "\"",
+        Ok("apos") => "'",
+        _          => "", // неизвестная сущность — пропускаем
+    }
+    .to_string()
+}
+
 pub fn parse_about_xml(xml_path: &Path) -> Result<AboutData> {
     let content = std::fs::read_to_string(xml_path)
         .with_context(|| format!("cannot read {:?}", xml_path))?;
 
     let mut reader = Reader::from_str(&content);
-    reader.config_mut().trim_text(true);
 
     let mut stack: Vec<String> = Vec::new();
+    let mut buf = String::new();
     let mut data = AboutData {
         name: String::new(),
         package_id: String::new(),
@@ -44,49 +65,57 @@ pub fn parse_about_xml(xml_path: &Path) -> Result<AboutData> {
             Ok(Event::Start(e)) => {
                 let tag = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
                 stack.push(tag);
+                buf.clear();
             }
             Ok(Event::Text(e)) => {
-                let text = match e.unescape() {
-                    Ok(t) => t.trim().to_string(),
-                    Err(_) => continue,
-                };
-                if text.is_empty() {
-                    continue;
+                if let Ok(t) = e.xml10_content() {
+                    buf.push_str(&t);
                 }
-
-                let cur  = stack.last().map(String::as_str).unwrap_or("");
-                let par  = stack.iter().rev().nth(1).map(String::as_str).unwrap_or("");
-                let gpar = stack.iter().rev().nth(2).map(String::as_str).unwrap_or("");
-
-                match (cur, par, gpar) {
-                    ("name",        "ModMetaData", _)      => data.name        = text,
-                    ("packageId",   "ModMetaData", _)      => data.package_id  = text,
-                    ("version",     "ModMetaData", _)      => data.version     = text,
-                    ("modVersion",  "ModMetaData", _)      => { if data.version.is_empty() { data.version = text; } }
-                    ("author",      "ModMetaData", _)      => data.author      = text,
-                    ("description", "ModMetaData", _)      => data.description = text,
-                    ("li", "supportedVersions",    _)      => data.supported_versions.push(text),
-                    // loadAfter и forceLoadAfter имеют одинаковую семантику
-                    ("li", "loadAfter",            _)      => data.load_after.push(text),
-                    ("li", "forceLoadAfter",       _)      => data.load_after.push(text),
-                    // loadBefore и forceLoadBefore имеют одинаковую семантику
-                    ("li", "loadBefore",           _)      => data.load_before.push(text),
-                    ("li", "forceLoadBefore",      _)      => data.load_before.push(text),
-                    ("li", "incompatibleWith",     _)      => data.incompatible_with.push(text),
-                    ("packageId", "li", "modDependencies") => data.dependencies.push(text),
-                    // Множественные авторы: <authors><li>Name</li></authors>
-                    ("li", "authors", "ModMetaData")       => {
-                        if data.author.is_empty() {
-                            data.author = text;
-                        } else {
-                            data.author.push_str(", ");
-                            data.author.push_str(&text);
-                        }
-                    }
-                    _ => {}
+            }
+            Ok(Event::GeneralRef(e)) => buf.push_str(&resolve_ref(&e)),
+            Ok(Event::CData(e)) => {
+                if let Ok(t) = e.decode() {
+                    buf.push_str(&t);
                 }
             }
             Ok(Event::End(_)) => {
+                let text = buf.trim().to_string();
+                buf.clear();
+
+                if !text.is_empty() {
+                    let cur  = stack.last().map(String::as_str).unwrap_or("");
+                    let par  = stack.iter().rev().nth(1).map(String::as_str).unwrap_or("");
+                    let gpar = stack.iter().rev().nth(2).map(String::as_str).unwrap_or("");
+
+                    match (cur, par, gpar) {
+                        ("name",        "ModMetaData", _)      => data.name        = text,
+                        ("packageId",   "ModMetaData", _)      => data.package_id  = text,
+                        ("version",     "ModMetaData", _)      => data.version     = text,
+                        ("modVersion",  "ModMetaData", _)      => { if data.version.is_empty() { data.version = text; } }
+                        ("author",      "ModMetaData", _)      => data.author      = text,
+                        ("description", "ModMetaData", _)      => data.description = text,
+                        ("li", "supportedVersions",    _)      => data.supported_versions.push(text),
+                        // loadAfter и forceLoadAfter имеют одинаковую семантику
+                        ("li", "loadAfter",            _)      => data.load_after.push(text),
+                        ("li", "forceLoadAfter",       _)      => data.load_after.push(text),
+                        // loadBefore и forceLoadBefore имеют одинаковую семантику
+                        ("li", "loadBefore",           _)      => data.load_before.push(text),
+                        ("li", "forceLoadBefore",      _)      => data.load_before.push(text),
+                        ("li", "incompatibleWith",     _)      => data.incompatible_with.push(text),
+                        ("packageId", "li", "modDependencies") => data.dependencies.push(text),
+                        // Множественные авторы: <authors><li>Name</li></authors>
+                        ("li", "authors", "ModMetaData")       => {
+                            if data.author.is_empty() {
+                                data.author = text;
+                            } else {
+                                data.author.push_str(", ");
+                                data.author.push_str(&text);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
                 stack.pop();
             }
             Ok(Event::Eof) => break,
@@ -108,9 +137,9 @@ pub fn parse_mods_config(xml_path: &Path) -> Result<Vec<String>> {
         .with_context(|| format!("cannot read {:?}", xml_path))?;
 
     let mut reader = Reader::from_str(&content);
-    reader.config_mut().trim_text(true);
 
     let mut stack: Vec<String> = Vec::new();
+    let mut buf = String::new();
     let mut active_mods: Vec<String> = Vec::new();
 
     loop {
@@ -118,22 +147,24 @@ pub fn parse_mods_config(xml_path: &Path) -> Result<Vec<String>> {
             Ok(Event::Start(e)) => {
                 let tag = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
                 stack.push(tag);
+                buf.clear();
             }
             Ok(Event::Text(e)) => {
-                let text = match e.unescape() {
-                    Ok(t) => t.trim().to_string(),
-                    Err(_) => continue,
-                };
-                if text.is_empty() {
-                    continue;
-                }
-                let cur = stack.last().map(String::as_str).unwrap_or("");
-                let par = stack.iter().rev().nth(1).map(String::as_str).unwrap_or("");
-                if cur == "li" && par == "activeMods" {
-                    active_mods.push(text);
+                if let Ok(t) = e.xml10_content() {
+                    buf.push_str(&t);
                 }
             }
+            Ok(Event::GeneralRef(e)) => buf.push_str(&resolve_ref(&e)),
             Ok(Event::End(_)) => {
+                let text = buf.trim().to_string();
+                buf.clear();
+                if !text.is_empty() {
+                    let cur = stack.last().map(String::as_str).unwrap_or("");
+                    let par = stack.iter().rev().nth(1).map(String::as_str).unwrap_or("");
+                    if cur == "li" && par == "activeMods" {
+                        active_mods.push(text);
+                    }
+                }
                 stack.pop();
             }
             Ok(Event::Eof) => break,
@@ -199,9 +230,9 @@ fn read_mods_config_extras(xml_path: &Path) -> (String, Vec<String>) {
     };
 
     let mut reader = Reader::from_str(&content);
-    reader.config_mut().trim_text(true);
 
     let mut stack: Vec<String> = Vec::new();
+    let mut buf = String::new();
     let mut version = String::new();
     let mut known: Vec<String> = Vec::new();
 
@@ -210,24 +241,26 @@ fn read_mods_config_extras(xml_path: &Path) -> (String, Vec<String>) {
             Ok(Event::Start(e)) => {
                 let tag = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
                 stack.push(tag);
+                buf.clear();
             }
             Ok(Event::Text(e)) => {
-                let text = match e.unescape() {
-                    Ok(t) => t.trim().to_string(),
-                    Err(_) => continue,
-                };
-                if text.is_empty() {
-                    continue;
-                }
-                let cur = stack.last().map(String::as_str).unwrap_or("");
-                let par = stack.iter().rev().nth(1).map(String::as_str).unwrap_or("");
-                match (cur, par) {
-                    ("version", "ModsConfigData") => version = text,
-                    ("li", "knownExpansions") => known.push(text),
-                    _ => {}
+                if let Ok(t) = e.xml10_content() {
+                    buf.push_str(&t);
                 }
             }
+            Ok(Event::GeneralRef(e)) => buf.push_str(&resolve_ref(&e)),
             Ok(Event::End(_)) => {
+                let text = buf.trim().to_string();
+                buf.clear();
+                if !text.is_empty() {
+                    let cur = stack.last().map(String::as_str).unwrap_or("");
+                    let par = stack.iter().rev().nth(1).map(String::as_str).unwrap_or("");
+                    match (cur, par) {
+                        ("version", "ModsConfigData") => version = text,
+                        ("li", "knownExpansions") => known.push(text),
+                        _ => {}
+                    }
+                }
                 stack.pop();
             }
             Ok(Event::Eof) => break,

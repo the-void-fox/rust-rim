@@ -1,4 +1,3 @@
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
@@ -120,11 +119,15 @@ fn run_install(base: &Path, tx: &mpsc::Sender<InstallEvent>) -> anyhow::Result<(
 }
 
 fn download_bytes(url: &str) -> anyhow::Result<Vec<u8>> {
-    let response = ureq::get(url)
+    let mut response = ureq::get(url)
         .call()
         .map_err(|e| anyhow::anyhow!("HTTP ошибка: {e}"))?;
-    let mut buf = Vec::new();
-    response.into_reader().read_to_end(&mut buf)?;
+    // Архив SteamCMD — несколько десятков МБ; лимит тела по умолчанию (10 МБ) мал.
+    let buf = response
+        .body_mut()
+        .with_config()
+        .limit(512 * 1024 * 1024)
+        .read_to_vec()?;
     Ok(buf)
 }
 

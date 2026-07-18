@@ -1,23 +1,24 @@
 [package]
 name = "rust-rim"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2024"
 
 [dependencies]
 # GUI:
-eframe = { version = "0.34.1", features = ["default"] }
-egui = "0.34.1"
-egui_extras = "0.34.1"
+eframe = { version = "0.35", features = ["default"] }
+egui = "0.35"
+egui_extras = "0.35"
+egui_commonmark = "0.24"    # Markdown-рендеринг описаний модов
 
 # Сериализация
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # XML парсинг
-quick-xml = { version = "0.37", features = ["serialize"] }
+quick-xml = { version = "0.41", features = ["serialize"] }
 
 # Работа с путями и файлами
-directories = "5"           # Стандартные пути ОС
+directories = "6"           # Стандартные пути ОС
 
 # Логирование
 tracing = "0.1"
@@ -28,18 +29,18 @@ anyhow = "1"                # Удобная обработка ошибок
 thiserror = "2"             # Кастомные ошибки
 
 # Нативные диалоги выбора файлов/папок
-rfd = "0.15"
+rfd = "0.17"
 
-# HTTP-клиент для загрузки community rules (rustls, без системного OpenSSL)
-ureq = { version = "2", features = ["json"] }
+# HTTP-клиент (rustls, без системного OpenSSL)
+ureq = { version = "3", features = ["json"] }
 
 # Декодирование изображений (PNG/JPEG/WebP баннеры модов)
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 
-# HTML-парсинг (Steam Workshop scraping)
-scraper = "0.22"
-
 # Распаковка архивов SteamCMD
 flate2 = "1"
 tar    = "0.4"
-zip    = "2"
+zip    = "8"
+
+[dev-dependencies]
+log = "0.4.33"
