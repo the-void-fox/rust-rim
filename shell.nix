@@ -23,6 +23,10 @@ pkgs.mkShell {
     libGLU
 
     # rfd (файловые диалоги)
+    # rfd ≥0.16 загружает libdbus-1.so.3 через dlopen (портал XDG);
+    # zenity — его fallback, если портал недоступен.
+    dbus
+    zenity
     gtk3
     glib
     pkg-config
@@ -50,6 +54,7 @@ pkgs.mkShell {
       pkgs.libXrandr
       pkgs.wayland
       pkgs.libxkbcommon
+      pkgs.dbus.lib   # libdbus-1.so.3 для файловых диалогов rfd
     ]}
 
     # rustup хранит тулчейны в ~/.rustup — убеждаемся что PATH правильный
