@@ -1,10 +1,16 @@
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
+use serde::Deserialize as _;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 pub const APP_ID: u64 = 294100;
 
 const USER_AGENT: &str =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+
+/// Страница браузера Workshop весит ~1 МБ; лимит с запасом.
+const BODY_LIMIT: u64 = 32 * 1024 * 1024;
 
 // ─── Типы ────────────────────────────────────────────────────────────────────
 
@@ -60,6 +66,16 @@ impl SortOrder {
 }
 
 // ─── Запрос к Steam Workshop ─────────────────────────────────────────────────
+//
+// Steam переписал страницы Workshop на React: серверная разметка с классами
+// вида .workshopItem исчезла, CSS-скрейпинг больше невозможен. Однако данные
+// по-прежнему рендерятся на сервере и встраиваются в страницу как JSON:
+//
+//   window.SSR.renderContext = JSON.parse("{...\"queryData\":\"{...}\"...}");
+//
+// Внутри queryData лежит кэш react-query, где запись с ключом
+// ["workshop_browse", {...}] содержит результаты поиска (publishedfileid,
+// title, preview_url, ...) и creator_player_link_details с именами авторов.
 
 /// Возвращает список модов и флаг наличия следующей страницы.
 pub fn fetch_workshop_page(
@@ -67,94 +83,36 @@ pub fn fetch_workshop_page(
     page: u32,
     sort: SortOrder,
 ) -> Result<(Vec<WorkshopItem>, bool)> {
-    let encoded = url_encode(query);
     let url = format!(
         "https://steamcommunity.com/workshop/browse/?appid={}&searchtext={}&section=readytouseitems&browsesort={}&p={}",
-        APP_ID, encoded, sort.as_param(), page
+        APP_ID, url_encode(query), sort.as_param(), page
     );
 
-    let html = ureq::get(&url)
-        .set("User-Agent", USER_AGENT)
-        .set("Accept-Language", "en-US,en;q=0.9")
-        .call()
-        .map_err(|e| anyhow::anyhow!("HTTP ошибка: {e}"))?
-        .into_string()?;
+    let html = fetch_html(&url)?;
+    let data = extract_browse_data(&html)?;
+    let authors = author_names(&data);
 
-    parse_page(&html)
-}
+    let items = data["results"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|r| {
+                    let id: u64 = r["publishedfileid"].as_str()?.parse().ok()?;
+                    Some(WorkshopItem {
+                        id,
+                        title: r["title"].as_str().unwrap_or_default().to_string(),
+                        author: authors
+                            .get(r["creator"].as_str().unwrap_or_default())
+                            .cloned()
+                            .unwrap_or_default(),
+                        preview_url: thumb_url(r["preview_url"].as_str().unwrap_or_default()),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
-fn parse_page(html: &str) -> Result<(Vec<WorkshopItem>, bool)> {
-    use scraper::{Html, Selector};
-
-    let doc = Html::parse_document(html);
-
-    let item_sel   = Selector::parse(".workshopItem").unwrap();
-    let link_sel   = Selector::parse("a.ugc").unwrap();
-    let img_sel    = Selector::parse(".workshopItemPreviewImage").unwrap();
-    let title_sel  = Selector::parse(".workshopItemTitle").unwrap();
-    let author_sel = Selector::parse(".workshopItemAuthorName a").unwrap();
-    let next_sel   = Selector::parse("a.pagebtn").unwrap();
-
-    let mut items = Vec::new();
-
-    for el in doc.select(&item_sel) {
-        let href = el
-            .select(&link_sel)
-            .next()
-            .and_then(|a| a.value().attr("href"))
-            .unwrap_or("");
-
-        let id: u64 = href
-            .split("id=")
-            .nth(1)
-            .and_then(|s| s.split('&').next())
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-
-        if id == 0 {
-            continue;
-        }
-
-        let preview_url = el
-            .select(&img_sel)
-            .next()
-            .and_then(|img| img.value().attr("src"))
-            .unwrap_or("")
-            .to_string();
-
-        let title = el
-            .select(&title_sel)
-            .next()
-            .map(|n| n.text().collect::<String>().trim().to_string())
-            .unwrap_or_default();
-
-        let author = el
-            .select(&author_sel)
-            .next()
-            .map(|n| n.text().collect::<String>().trim().to_string())
-            .unwrap_or_default();
-
-        items.push(WorkshopItem { id, title, author, preview_url });
-    }
-
-    let has_next = doc.select(&next_sel).any(|btn| btn.text().collect::<String>().trim() == ">");
-
-    Ok((items, has_next))
-}
-
-// ─── Вспомогательное ──────────────────────────────────────────────────────────
-
-fn url_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() * 2);
-    for b in s.bytes() {
-        match b {
-            b' '                                          => out.push('+'),
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
-            | b'-' | b'_' | b'.' | b'~'                  => out.push(b as char),
-            _                                             => { let _ = out.write_fmt(format_args!("%{b:02X}")); }
-        }
-    }
-    out
+    Ok((items, has_next_page(&data)))
 }
 
 // ─── Сборки (Collections) ────────────────────────────────────────────────────
@@ -173,63 +131,45 @@ pub fn fetch_collections_page(
         "https://steamcommunity.com/workshop/browse/?appid={}{}&section=collections&browsesort={}&p={}",
         APP_ID, search_part, sort.as_param(), page
     );
-    let html = ureq::get(&url)
-        .set("User-Agent", USER_AGENT)
-        .set("Accept-Language", "en-US,en;q=0.9")
-        .call()
-        .map_err(|e| anyhow::anyhow!("HTTP ошибка: {e}"))?
-        .into_string()?;
-    parse_collections_page(&html)
-}
 
-fn parse_collections_page(html: &str) -> Result<(Vec<CollectionItem>, bool)> {
-    use scraper::{Html, Selector};
-    let doc = Html::parse_document(html);
-    // Collections page wraps everything in <a class="workshopItemCollection ugc ...">
-    // The <a> is the parent of .workshopItem, not a child — so we select the <a> directly.
-    let item_sel   = Selector::parse("a.workshopItemCollection").unwrap();
-    let img_sel    = Selector::parse(".workshopItemPreviewImage").unwrap();
-    let title_sel  = Selector::parse(".workshopItemTitle").unwrap();
-    let author_sel = Selector::parse(".workshopItemAuthorName").unwrap();
-    let next_sel   = Selector::parse("a.pagebtn").unwrap();
+    let html = fetch_html(&url)?;
+    let data = extract_browse_data(&html)?;
+    let authors = author_names(&data);
 
-    let mut items = Vec::new();
-    for el in doc.select(&item_sel) {
-        let id: u64 = el.value().attr("data-publishedfileid")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        if id == 0 { continue; }
-        let preview_url = el.select(&img_sel).next()
-            .and_then(|img| img.value().attr("src")).unwrap_or("").to_string();
-        let title = el.select(&title_sel).next()
-            .map(|n| n.text().collect::<String>().trim().to_string()).unwrap_or_default();
-        let author = el.select(&author_sel).next()
-            .map(|n| n.text().collect::<String>().trim().to_string()).unwrap_or_default();
-        items.push(CollectionItem { id, title, author, preview_url });
-    }
-    let has_next = doc.select(&next_sel).any(|btn| btn.text().collect::<String>().trim() == ">");
-    Ok((items, has_next))
+    let items = data["results"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|r| {
+                    let id: u64 = r["publishedfileid"].as_str()?.parse().ok()?;
+                    Some(CollectionItem {
+                        id,
+                        title: r["title"].as_str().unwrap_or_default().to_string(),
+                        author: authors
+                            .get(r["creator"].as_str().unwrap_or_default())
+                            .cloned()
+                            .unwrap_or_default(),
+                        preview_url: thumb_url(r["preview_url"].as_str().unwrap_or_default()),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok((items, has_next_page(&data)))
 }
 
 /// Возвращает (название сборки, список модов).
+/// Использует старый POST-API Steam (ключ не нужен) — он всё ещё работает.
 pub fn fetch_collection_mods(collection_id: u64) -> Result<(String, Vec<WorkshopItem>)> {
-    use std::fmt::Write as _;
-
-    // Шаг 1: получить дочерние ID через Steam Web API (ключ не нужен)
+    // Шаг 1: получить дочерние ID
     let body = format!("collectioncount=1&publishedfileids[0]={}", collection_id);
-    let resp = ureq::post("https://api.steampowered.com/ISteamRemoteStorage/GetCollectionDetails/v1/")
-        .set("Content-Type", "application/x-www-form-urlencoded")
-        .set("User-Agent", USER_AGENT)
-        .send_string(&body)
-        .map_err(|e| anyhow::anyhow!("HTTP ошибка: {e}"))?
-        .into_string()?;
+    let json = post_form("https://api.steampowered.com/ISteamRemoteStorage/GetCollectionDetails/v1/", &body)?;
 
-    let json: serde_json::Value = serde_json::from_str(&resp)?;
     let detail = &json["response"]["collectiondetails"][0];
-    let coll_title = detail["title"].as_str().unwrap_or("Collection").to_string();
 
     let children = detail["children"].as_array()
-        .ok_or_else(|| anyhow::anyhow!("Сборка пустая или недоступна"))?;
+        .ok_or_else(|| anyhow!("Сборка пустая или недоступна"))?;
 
     let ids: Vec<u64> = children.iter()
         .filter_map(|c| c["publishedfileid"].as_str())
@@ -237,35 +177,142 @@ pub fn fetch_collection_mods(collection_id: u64) -> Result<(String, Vec<Workshop
         .collect();
 
     if ids.is_empty() {
-        return Ok((coll_title, Vec::new()));
+        return Ok(("Collection".to_string(), Vec::new()));
     }
 
-    // Шаг 2: получить детали каждого мода
-    let mut body = format!("itemcount={}", ids.len());
+    // Шаг 2: получить детали каждого мода.
+    // GetCollectionDetails не возвращает название сборки, поэтому запрашиваем
+    // и саму сборку (первым элементом) — её title и есть название.
+    let mut body = format!("itemcount={}&publishedfileids[0]={}", ids.len() + 1, collection_id);
     for (i, id) in ids.iter().enumerate() {
-        let _ = write!(body, "&publishedfileids[{}]={}", i, id);
+        let _ = write!(body, "&publishedfileids[{}]={}", i + 1, id);
     }
 
-    let resp = ureq::post("https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/")
-        .set("Content-Type", "application/x-www-form-urlencoded")
-        .set("User-Agent", USER_AGENT)
-        .send_string(&body)
-        .map_err(|e| anyhow::anyhow!("HTTP ошибка: {e}"))?
-        .into_string()?;
-
-    let json: serde_json::Value = serde_json::from_str(&resp)?;
+    let json = post_form("https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/", &body)?;
     let details = json["response"]["publishedfiledetails"]
         .as_array()
-        .ok_or_else(|| anyhow::anyhow!("Нет данных о модах сборки"))?;
+        .ok_or_else(|| anyhow!("Нет данных о модах сборки"))?;
 
+    let mut coll_title = "Collection".to_string();
     let items = details.iter()
         .filter_map(|d| {
             let id = d["publishedfileid"].as_str()?.parse::<u64>().ok()?;
             let title = d["title"].as_str().unwrap_or("").to_string();
-            let preview_url = d["preview_url"].as_str().unwrap_or("").to_string();
+            if id == collection_id {
+                if !title.is_empty() {
+                    coll_title = title;
+                }
+                return None;
+            }
+            let preview_url = thumb_url(d["preview_url"].as_str().unwrap_or(""));
             Some(WorkshopItem { id, title, author: String::new(), preview_url })
         })
         .collect();
 
     Ok((coll_title, items))
+}
+
+// ─── HTTP ────────────────────────────────────────────────────────────────────
+
+fn fetch_html(url: &str) -> Result<String> {
+    let mut resp = ureq::get(url)
+        .header("User-Agent", USER_AGENT)
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .call()
+        .map_err(|e| anyhow!("HTTP ошибка: {e}"))?;
+    Ok(resp.body_mut().with_config().limit(BODY_LIMIT).read_to_string()?)
+}
+
+fn post_form(url: &str, body: &str) -> Result<Value> {
+    let mut resp = ureq::post(url)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("User-Agent", USER_AGENT)
+        .send(body)
+        .map_err(|e| anyhow!("HTTP ошибка: {e}"))?;
+    let text = resp.body_mut().with_config().limit(BODY_LIMIT).read_to_string()?;
+    Ok(serde_json::from_str(&text)?)
+}
+
+// ─── Разбор SSR-данных страницы ──────────────────────────────────────────────
+
+/// Извлекает `state.data` запроса `workshop_browse` из встроенного SSR-кэша.
+fn extract_browse_data(html: &str) -> Result<Value> {
+    const MARKER: &str = "window.SSR.renderContext=JSON.parse(";
+
+    let start = html.find(MARKER)
+        .ok_or_else(|| anyhow!("Steam изменил формат страницы: renderContext не найден"))?
+        + MARKER.len();
+
+    // Аргумент JSON.parse(...) — строковый литерал, совместимый с JSON.
+    // Deserializer читает ровно один литерал и игнорирует остальной скрипт.
+    let mut de = serde_json::Deserializer::from_str(&html[start..]);
+    let inner = String::deserialize(&mut de)
+        .map_err(|e| anyhow!("Не удалось прочитать renderContext: {e}"))?;
+
+    let ctx: Value = serde_json::from_str(&inner)?;
+    let query_data: Value = serde_json::from_str(
+        ctx["queryData"].as_str().ok_or_else(|| anyhow!("queryData отсутствует"))?,
+    )?;
+
+    let queries = query_data["queries"].as_array()
+        .ok_or_else(|| anyhow!("queries отсутствуют в queryData"))?;
+
+    for q in queries {
+        if q["queryKey"][0].as_str() == Some("workshop_browse") {
+            let data = &q["state"]["data"];
+            if data.is_object() {
+                return Ok(data.clone());
+            }
+        }
+    }
+    bail!("Данные workshop_browse не найдены на странице")
+}
+
+/// Превращает полноразмерный URL превью в URL миниатюры через CDN-ресайз Steam.
+/// Полные превью — мегабайтные PNG; миниатюра ~8 КБ JPEG (в 60 раз меньше).
+fn thumb_url(raw: &str) -> String {
+    if raw.is_empty() {
+        return String::new();
+    }
+    let sep = if raw.contains('?') { '&' } else { '?' };
+    format!("{raw}{sep}imw=256&imh=256&ima=fit&impolicy=Letterbox")
+}
+
+/// Карта steamid → имя автора из creator_player_link_details.
+fn author_names(data: &Value) -> HashMap<String, String> {
+    data["creator_player_link_details"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|p| {
+                    let pd = &p["public_data"];
+                    Some((
+                        pd["steamid"].as_str()?.to_string(),
+                        pd["persona_name"].as_str()?.to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn has_next_page(data: &Value) -> bool {
+    let cur   = data["current_page"].as_u64().unwrap_or(1);
+    let total = data["total_pages"].as_u64().unwrap_or(1);
+    cur < total
+}
+
+// ─── Вспомогательное ──────────────────────────────────────────────────────────
+
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 2);
+    for b in s.bytes() {
+        match b {
+            b' '                                          => out.push('+'),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
+            | b'-' | b'_' | b'.' | b'~'                  => out.push(b as char),
+            _                                             => { let _ = out.write_fmt(format_args!("%{b:02X}")); }
+        }
+    }
+    out
 }

@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
 use std::sync::mpsc;
 
 use egui::{Frame, Margin, RichText, Stroke, Vec2};
@@ -17,11 +16,16 @@ enum BrowserTab {
 
 // ─── Async image cache ───────────────────────────────────────────────────────
 
+/// Максимум текстур, загружаемых в GPU за один кадр: защита от фриза,
+/// когда приходит сразу страница из 30 картинок.
+const MAX_TEXTURE_UPLOADS_PER_FRAME: usize = 3;
+
 struct ImageCache {
     textures: HashMap<String, egui::TextureHandle>,
     pending: HashSet<String>,
-    tx: mpsc::Sender<(String, Vec<u8>)>,
-    rx: mpsc::Receiver<(String, Vec<u8>)>,
+    // Декод выполняется в фоновом потоке; по каналу приходит готовый ColorImage.
+    tx: mpsc::Sender<(String, egui::ColorImage)>,
+    rx: mpsc::Receiver<(String, egui::ColorImage)>,
 }
 
 impl ImageCache {
@@ -38,31 +42,30 @@ impl ImageCache {
         let url_owned = url.to_string();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let result: anyhow::Result<Vec<u8>> = (|| {
-                let mut buf = Vec::new();
-                ureq::get(&url_owned)
-                    .set("User-Agent", "Mozilla/5.0")
+            // Скачивание И декод — в этом потоке; UI-поток только грузит текстуру.
+            let result: anyhow::Result<egui::ColorImage> = (|| {
+                let buf = ureq::get(&url_owned)
+                    .header("User-Agent", "Mozilla/5.0")
                     .call()?
-                    .into_reader()
-                    .read_to_end(&mut buf)?;
-                Ok(buf)
+                    .body_mut()
+                    .read_to_vec()?;
+                let img = image::load_from_memory(&buf)?;
+                let rgba = img.to_rgba8();
+                let size = [rgba.width() as usize, rgba.height() as usize];
+                Ok(egui::ColorImage::from_rgba_unmultiplied(size, &rgba.into_raw()))
             })();
-            if let Ok(bytes) = result {
-                let _ = tx.send((url_owned, bytes));
+            if let Ok(ci) = result {
+                let _ = tx.send((url_owned, ci));
             }
         });
     }
 
     fn poll(&mut self, ctx: &egui::Context) {
-        while let Ok((url, bytes)) = self.rx.try_recv() {
+        for _ in 0..MAX_TEXTURE_UPLOADS_PER_FRAME {
+            let Ok((url, ci)) = self.rx.try_recv() else { break };
             self.pending.remove(&url);
-            if let Ok(img) = image::load_from_memory(&bytes) {
-                let rgba = img.to_rgba8();
-                let size = [rgba.width() as usize, rgba.height() as usize];
-                let ci = egui::ColorImage::from_rgba_unmultiplied(size, &rgba.into_raw());
-                let tex = ctx.load_texture(&url, ci, egui::TextureOptions::LINEAR);
-                self.textures.insert(url, tex);
-            }
+            let tex = ctx.load_texture(&url, ci, egui::TextureOptions::LINEAR);
+            self.textures.insert(url, tex);
         }
     }
 
