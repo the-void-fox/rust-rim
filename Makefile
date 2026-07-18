@@ -37,7 +37,9 @@ $(DIST)/$(APP_NAME)-$(APP_VER)-linux-x86_64: $(BIN_LIN)
 	cp $(BIN_LIN) $@
 	@echo "✅  Linux → $@"
 
-$(BIN_LIN):
+# FORCE: инкрементальностью управляет cargo, а не make —
+# иначе устаревший бинарник в target/ попадает в dist/ без пересборки.
+$(BIN_LIN): FORCE
 	cargo zigbuild --release --target $(TARGET_LIN)
 	# Убираем /nix/store пути из RPATH — бинарник должен работать
 	# на обычных Linux системах (Debian, Ubuntu, Arch, …)
@@ -112,7 +114,7 @@ $(DIST)/$(APP_NAME)-$(APP_VER)-windows-x86_64.exe: $(BIN_WIN)
 	cp $(BIN_WIN) $@
 	@echo "✅  Windows → $@"
 
-$(BIN_WIN):
+$(BIN_WIN): FORCE
 	# cargo-zigbuild использует Zig как линкер — не требует Docker
 	# -mwindows скрывает консоль (аналог windows_subsystem = "windows")
 	cargo zigbuild --release --target $(TARGET_WIN)
@@ -126,3 +128,4 @@ clean:
 sizes:
 	@echo "\n── Артефакты ──"
 	@ls -lh $(DIST)/ 2>/dev/null || echo "(пусто)"
+FORCE:
