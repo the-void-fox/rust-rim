@@ -57,7 +57,7 @@
 
           # Копируем иконку в системную директорию
           postInstall = ''
-            install -Dm644 src/assetc/icon.png $out/share/pixmaps/rust-rim.png
+            install -Dm644 src/assets/icon.png $out/share/pixmaps/rust-rim.png
           '';
 
           # GUI-приложению нужны рантайм-библиотеки в LD_LIBRARY_PATH
