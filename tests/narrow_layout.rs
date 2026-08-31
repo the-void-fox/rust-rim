@@ -13,7 +13,8 @@ use rust_rim::app::fits_two_columns;
 use rust_rim::mod_data::{ModDb, ModEntry, ModId, ModSource, Profile};
 use rust_rim::ui::list_cache::{ListCaches, SearchState};
 use rust_rim::ui::mod_list::ModList;
-use rust_rim::ui::{details, theme, toolbar, widgets};
+use rust_rim::ui::details::DetailsView;
+use rust_rim::ui::{theme, toolbar, widgets};
 
 fn fake_mod(i: usize) -> ModEntry {
     ModEntry {
@@ -42,7 +43,7 @@ struct Fixture {
     caches: ListCaches,
     search: SearchState,
     selected: Option<ModId>,
-    md_cache: egui_commonmark::CommonMarkCache,
+    details: DetailsView,
 }
 
 impl Fixture {
@@ -59,7 +60,7 @@ impl Fixture {
             caches: ListCaches::default(),
             search: SearchState::default(),
             selected: Some(ModId::new("author0.mod0")),
-            md_cache: egui_commonmark::CommonMarkCache::default(),
+            details: DetailsView::new(),
         }
     }
 
@@ -75,7 +76,7 @@ impl Fixture {
         let caches = &mut self.caches;
         let search = &mut self.search;
         let selected = &mut self.selected;
-        let md_cache = &mut self.md_cache;
+        let details = &mut self.details;
 
         let _ = self.ctx.run_ui(input, |root| {
             caches.refresh(db, profile, search);
@@ -100,7 +101,7 @@ impl Fixture {
                 .show(root, |ui| {
                     ui.set_width(widgets::fit_width(ui));
                     let m = selected.as_ref().and_then(|id| db.get(id));
-                    details::show_mod_details(ui, m, None, md_cache);
+                    details.show(ui, m, None);
                 });
 
             egui::CentralPanel::default().show(root, |ui| {

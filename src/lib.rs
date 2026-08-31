@@ -2,6 +2,7 @@
 // Бинарник (main.rs) использует эти же модули через `use rust_rim::...`.
 
 pub mod app;
+pub mod description;
 pub mod fs_util;
 pub mod job;
 pub mod log_analysis;

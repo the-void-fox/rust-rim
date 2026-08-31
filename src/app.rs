@@ -16,6 +16,7 @@ use crate::mod_data::{
 use crate::settings::AppSettings;
 use crate::sorting::CommunityRules;
 use crate::steam::steamcmd;
+use crate::ui::details::DetailsView;
 use crate::ui::duplicates::DuplicatesUi;
 use crate::ui::list_cache::{ListCaches, SearchState};
 use crate::ui::log_panel::LogPanel;
@@ -23,7 +24,7 @@ use crate::ui::mod_list::ModList;
 use crate::ui::preview::Preview;
 use crate::ui::steamcmd_panel::SteamCmdPanel;
 use crate::ui::workshop_browser::WorkshopBrowser;
-use crate::ui::{details, dialogs, duplicates, theme, toolbar, widgets};
+use crate::ui::{dialogs, duplicates, theme, toolbar, widgets};
 
 // ─── Payload для Drag & Drop ─────────────────────────────────────────────────
 #[derive(Clone, Debug)]
@@ -96,8 +97,8 @@ pub struct RustRim {
     workshop_browser: WorkshopBrowser,
     log_panel: LogPanel,
 
-    /// Кэш Markdown-рендерера описаний модов.
-    md_cache: egui_commonmark::CommonMarkCache,
+    /// Правая панель с информацией о моде (со своими кэшами).
+    details: DetailsView,
 
     /// Кэши фильтрации/предупреждений списков (см. ListCaches).
     caches: ListCaches,
@@ -125,7 +126,7 @@ impl RustRim {
             steamcmd_panel: SteamCmdPanel::new(),
             workshop_browser: WorkshopBrowser::new(),
             log_panel: LogPanel::new(),
-            md_cache: egui_commonmark::CommonMarkCache::default(),
+            details: DetailsView::new(),
             caches: ListCaches::default(),
             settings,
         };
@@ -562,7 +563,7 @@ impl RustRim {
 
                 let tex = self.preview.texture_for(ctx, preview_path.as_deref());
                 let selected = self.selected.as_ref().and_then(|id| self.db.get(id));
-                details::show_mod_details(ui, selected, tex, &mut self.md_cache);
+                self.details.show(ui, selected, tex);
             });
     }
 
