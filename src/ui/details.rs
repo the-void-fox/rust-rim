@@ -114,6 +114,11 @@ fn show_mod_details(
                 ui.label(RichText::new("ОПИСАНИЕ")
                     .color(theme::TEXT_MUTED).size(10.0).strong());
                 ui.add_space(4.0);
+                // Панель справа раскладывает содержимое по его же запросу
+                // и прижимает вправо: если контент шире панели, его левая
+                // часть уезжает за край и обрезается. Явный предел не даёт
+                // переносимым элементам запросить больше, чем есть.
+                ui.set_max_width(fit_width(ui));
                 egui_commonmark::CommonMarkViewer::new().show(ui, md_cache, markdown);
             }
 

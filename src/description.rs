@@ -11,11 +11,33 @@
 /// Схемы, по которым ссылку можно безопасно отдать в Markdown.
 const SAFE_SCHEMES: [&str; 2] = ["http://", "https://"];
 
+/// Максимальная длина видимого текста ссылки. Длинный URL — это один
+/// неразрывный «слово», которое не переносится: строка описания становится
+/// шире панели и ломает раскладку.
+const MAX_LABEL: usize = 45;
+
+/// Таблицы Markdown egui рисует без переноса строк, а панель деталей узкая
+/// (порядка 40 знаков). Что не влезает — раскладывается строками.
+const MAX_TABLE_WIDTH: usize = 60;
+const MAX_TABLE_COLUMNS: usize = 3;
+
 /// Преобразует описание мода в Markdown.
 pub fn to_markdown(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len() + raw.len() / 4);
-    convert(raw, &mut out);
+    let unescaped = unescape(raw);
+    let mut out = String::with_capacity(unescaped.len() + unescaped.len() / 4);
+    convert(&unescaped, &mut out);
     tidy(&out)
+}
+
+/// Часть About.xml сгенерирована с экранированными переносами: в описании
+/// лежит буквальный «\n» из двух символов, а не перевод строки.
+fn unescape(raw: &str) -> std::borrow::Cow<'_, str> {
+    if !raw.contains("\\n") && !raw.contains("\\t") {
+        return std::borrow::Cow::Borrowed(raw);
+    }
+    std::borrow::Cow::Owned(
+        raw.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t"),
+    )
 }
 
 // ─── Разбор разметки ─────────────────────────────────────────────────────────
@@ -204,8 +226,13 @@ fn emit_link(target: Option<&str>, text: &str, out: &mut String) {
     let url = target.map(str::trim).unwrap_or(text.trim());
     let mut label = String::new();
     convert(text.trim(), &mut label);
+    // В описаниях сплошь встречается картинка внутри ссылки:
+    // [url=…][img]…[/img][/url]. Вложенных ссылок в Markdown нет — без
+    // расплющивания получался «[[текст](A)](B)», который CommonMark
+    // показывал сырым текстом вместе с длинными URL.
+    let mut label = shorten(&flatten_links(&label));
     if label.is_empty() {
-        label.push_str(url);
+        label.push_str(&shorten(url));
     }
 
     if is_safe_url(url) {
@@ -218,6 +245,40 @@ fn emit_link(target: Option<&str>, text: &str, out: &mut String) {
         // Схемы вроде steam:// или javascript: в ссылку не превращаем.
         out.push_str(label.trim());
     }
+}
+
+/// Убирает разметку ссылок и картинок, оставляя видимый текст.
+fn flatten_links(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(open) = rest.find('[') {
+        out.push_str(&rest[..open]);
+        rest = &rest[open + 1..];
+        let Some(close) = rest.find("](") else {
+            out.push('[');
+            continue;
+        };
+        let text = &rest[..close];
+        let after = &rest[close + 2..];
+        let Some(end) = after.find(')') else {
+            out.push('[');
+            continue;
+        };
+        out.push_str(text);
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Укорачивает подпись, если это одно длинное «слово» (обычно голый URL).
+fn shorten(label: &str) -> String {
+    let label = label.trim();
+    if label.chars().count() <= MAX_LABEL || label.contains(char::is_whitespace) {
+        return label.to_string();
+    }
+    let head: String = label.chars().take(MAX_LABEL - 1).collect();
+    format!("{head}…")
 }
 
 /// Картинки из описаний почти всегда лежат на CDN Steam.
@@ -268,6 +329,28 @@ fn emit_table(inner: &str, out: &mut String) {
     }
 
     let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+
+    // Широкую таблицу разворачиваем в строки: они переносятся, а таблица —
+    // нет, и вылезает за панель, ломая раскладку всего окна.
+    let widest_row = rows
+        .iter()
+        .map(|r| r.iter().map(|c| visible_len(c) + 3).sum::<usize>())
+        .max()
+        .unwrap_or(0);
+    if width > MAX_TABLE_COLUMNS || widest_row > MAX_TABLE_WIDTH {
+        out.push('\n');
+        for row in &rows {
+            let line: Vec<&str> = row.iter().map(String::as_str).filter(|c| !c.is_empty()).collect();
+            if line.is_empty() {
+                continue;
+            }
+            out.push_str(&line.join(" · ").replace("\\|", "|"));
+            out.push('\n');
+        }
+        out.push('\n');
+        return;
+    }
+
     out.push('\n');
     for (i, row) in rows.iter().enumerate() {
         out.push_str("| ");
@@ -287,6 +370,11 @@ fn emit_table(inner: &str, out: &mut String) {
         }
     }
     out.push('\n');
+}
+
+/// Длина видимого текста: адреса ссылок на экран не попадают.
+fn visible_len(cell: &str) -> usize {
+    flatten_links(cell).chars().count()
 }
 
 /// Вырезает очередной `[tr]…[/tr]`, возвращая ячейки и съеденную длину.
@@ -457,6 +545,30 @@ mod tests {
     }
 
     #[test]
+    fn wide_table_falls_back_to_lines() {
+        // Панель деталей узкая, а таблицу egui не переносит: широкая таблица
+        // вылезала за панель и ломала раскладку окна.
+        let md = to_markdown(
+            "[table][tr][td]довольно длинная ячейка с текстом[/td]\
+             [td]и вторая такая же длинная ячейка[/td][/tr][/table]",
+        );
+        assert!(!md.contains('|'), "широкая таблица не должна остаться таблицей: {md}");
+        assert!(md.contains(" · "), "{md}");
+    }
+
+    #[test]
+    fn many_columns_fall_back_to_lines() {
+        let md = to_markdown("[table][tr][td]a[/td][td]b[/td][td]c[/td][td]d[/td][/tr][/table]");
+        assert_eq!(md, "a · b · c · d");
+    }
+
+    #[test]
+    fn narrow_table_stays_a_table() {
+        let md = to_markdown("[table][tr][th]имя[/th][th]цена[/th][/tr][tr][td]хлеб[/td][td]5[/td][/tr][/table]");
+        assert!(md.starts_with("| имя"), "{md}");
+    }
+
+    #[test]
     fn table_cells_escape_pipes() {
         let md = to_markdown("[table][tr][td]a|b[/td][/tr][/table]");
         assert!(md.contains("a\\|b"), "{md}");
@@ -492,6 +604,57 @@ mod tests {
         // Обрезанное описание не должно съедать остаток текста.
         assert_eq!(to_markdown("[b]без закрытия"), "[b]без закрытия");
         assert_eq!(to_markdown("текст [WIP] ещё"), "текст [WIP] ещё");
+    }
+
+    #[test]
+    fn literal_backslash_n_becomes_line_break() {
+        // Часть About.xml сгенерирована с экранированными переносами:
+        // в описании лежит «\\n» из двух символов.
+        assert_eq!(
+            to_markdown("Mod Version: 1.8\\n\\n\\nRemove overhead"),
+            "Mod Version: 1.8\n\nRemove overhead",
+        );
+        assert_eq!(to_markdown("a\\tb"), "a\tb");
+    }
+
+    #[test]
+    fn image_inside_link_does_not_nest() {
+        // Реальный шаблон из описаний Workshop: картинка-бейдж как ссылка.
+        // Вложенных ссылок в Markdown нет — подпись обязана стать плоской,
+        // иначе CommonMark показывает сырой текст с длинными URL и строка
+        // распирает панель по ширине.
+        let md = to_markdown(
+            "[url=https://discord.gg/h5TY6DA][img]https://img.litet.net/logos/Discord.png[/img][/url]",
+        );
+        assert_eq!(md, "[🖼 изображение](https://discord.gg/h5TY6DA)");
+        assert_eq!(md.matches("](").count(), 1, "ссылка должна быть ровно одна: {md}");
+        assert!(!md.contains("[["), "вложенной ссылки быть не должно: {md}");
+    }
+
+    #[test]
+    fn long_url_label_is_shortened() {
+        let md = to_markdown(
+            "[url]https://steamcommunity.com/sharedfiles/filedetails/?id=788610933&very=long[/url]",
+        );
+        let label = md.split_once("](").unwrap().0.trim_start_matches('[');
+        assert!(label.chars().count() <= MAX_LABEL, "подпись длиной {}: {label}", label.chars().count());
+        assert!(label.ends_with('…'));
+        // Сама ссылка при этом остаётся целой.
+        assert!(md.contains("id=788610933&very=long"), "{md}");
+    }
+
+    #[test]
+    fn badge_table_rows_stay_narrow() {
+        // Таблица из бейджей-ссылок — самый частый источник широкого контента.
+        let md = to_markdown(
+            "[table][tr]\
+             [td][url=https://discord.gg/h5TY6DA][img]https://img.litet.net/logos/Discord.png[/img][/url][/td]\
+             [td][url=https://github.com/emipa606/Bridges][img]https://img.litet.net/logos/GitHub.png[/img][/url][/td]\
+             [/tr][/table]",
+        );
+        let widest = md.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+        assert!(widest < 120, "строка таблицы слишком широкая ({widest}): {md}");
+        assert!(!md.contains("img.litet.net"), "URL картинки не должен попадать в текст: {md}");
     }
 
     #[test]
