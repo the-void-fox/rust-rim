@@ -56,17 +56,35 @@ fn main() {
         }
     }
 
-    if std::env::args().any(|a| a == "--launch") {
+    let quicktest = std::env::args().any(|a| a == "--quicktest");
+    if std::env::args().any(|a| a == "--launch") || quicktest {
         let secs: u64 = std::env::args()
             .last()
             .and_then(|a| a.parse().ok())
             .unwrap_or(30);
-        launch_and_wait(game, &settings, secs);
+        let mode = if quicktest {
+            // Лог кладём внутрь префикса: под umu игра работает в контейнере
+            // pressure-vessel со своим /tmp, и файл на хосте не появится.
+            let log = paths::find_prefixes()
+                .first()
+                .map(|p| p.data_dir.join("rustrim-quicktest.log"))
+                .expect("не найден префикс для лога");
+            println!("Лог автотеста: {}", log.display());
+            launch::Mode::QuickTest { log_file: log }
+        } else {
+            launch::Mode::Play
+        };
+        launch_and_wait(game, &settings, secs, mode);
     }
 }
 
-fn launch_and_wait(game: &std::path::Path, settings: &launch::LaunchSettings, secs: u64) {
-    let plan = match launch::plan(game, settings, &launch::Mode::Play) {
+fn launch_and_wait(
+    game: &std::path::Path,
+    settings: &launch::LaunchSettings,
+    secs: u64,
+    mode: launch::Mode,
+) {
+    let plan = match launch::plan(game, settings, &mode) {
         Ok(p) => p,
         Err(e) => {
             println!("\nЗапуск невозможен: {e}");

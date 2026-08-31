@@ -43,5 +43,9 @@ flate2 = "1"
 tar    = "0.4"
 zip    = "8"
 
+# Сигналы процессам: снять цепочку wine/Proton после запуска игры
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 log = "0.4.33"

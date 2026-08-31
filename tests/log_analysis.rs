@@ -76,6 +76,19 @@ fn parses_and_groups() {
 }
 
 #[test]
+fn vanilla_mono_noise_is_not_an_error() {
+    // Эти строки Mono печатает десятками при каждом запуске. Без фильтра
+    // любой прогон -quicktest выглядел бы сбойным.
+    let log = "Fallback handler could not load library X:/Games/RimWorld/data-0001.dll\n\
+               Could not load signature of System.Foo:Bar\n\
+               Could not load UnityEngine.Texture2D at Things/Chair from mod /home/user/Mods/CoolChairs/Textures: file not found\n";
+    let issues = parse_log(log);
+
+    assert_eq!(issues.len(), 1, "должна остаться только настоящая ошибка: {issues:#?}");
+    assert!(issues[0].title.contains("Texture2D"), "{}", issues[0].title);
+}
+
+#[test]
 fn attributes_suspects() {
     let mods = vec![
         fake_mod("Vanilla Furniture Expanded", "vanillaexpanded.vfecore", "VFECore"),

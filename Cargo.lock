@@ -3253,6 +3253,7 @@ dependencies = [
  "egui_extras",
  "flate2",
  "image",
+ "libc",
  "log",
  "quick-xml 0.41.0",
  "rfd",

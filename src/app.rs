@@ -11,6 +11,7 @@ use egui::{Color32, Frame, Margin, RichText, Stroke, Vec2};
 use crate::fs_util;
 use crate::game::{launch, paths, Prefix};
 use crate::process::Run;
+use crate::testing::{self, Phase, TestRun};
 use crate::mod_data::{
     ModDb, ModId, ModSource, Profile,
     parse_mods_config, scan_dlc_mods, scan_local_mods, write_mod_list, write_mods_config,
@@ -24,6 +25,7 @@ use crate::ui::duplicates::DuplicatesUi;
 use crate::ui::list_cache::{ListCaches, SearchState};
 use crate::ui::tags_panel::TagsUi;
 use crate::ui::launch_panel;
+use crate::ui::test_panel::{self, TestUi};
 use crate::ui::validation_panel::{self, ValidationUi};
 use crate::ui::log_panel::LogPanel;
 use crate::ui::mod_list::ModList;
@@ -106,6 +108,10 @@ pub struct RustRim {
     tags: Tags,
     tags_ui: TagsUi,
 
+    /// Автотест сборки через -quicktest.
+    test_run: Option<TestRun>,
+    test_ui: TestUi,
+
     /// Проверка сборки: диагностики и окно с ними.
     validation: ValidationUi,
     /// Версия игры из Version.txt — нужна для проверки supportedVersions.
@@ -151,6 +157,8 @@ impl RustRim {
             duplicates: DuplicatesUi::default(),
             tags: Tags::load(),
             tags_ui: TagsUi::default(),
+            test_run: None,
+            test_ui: TestUi::default(),
             validation: ValidationUi::new(),
             game_version: None,
             detected_prefixes: Vec::new(),
@@ -593,6 +601,7 @@ impl eframe::App for RustRim {
         self.show_notice(&ctx);
         self.show_launch_window(&ctx);
         self.show_validation(&ctx);
+        self.show_test(&ctx);
     }
 }
 
@@ -617,6 +626,7 @@ impl RustRim {
         if resp.tags_clicked      { self.tags_ui.open = true; }
         if resp.play_clicked      { self.launch_game(); }
         if resp.check_clicked     { self.revalidate(); self.validation.open = true; }
+        if resp.test_clicked      { self.start_test(); }
     }
 
     fn show_status_bar(&mut self, ui: &mut egui::Ui) {
@@ -971,6 +981,99 @@ impl RustRim {
         {
             self.steamcmd_panel.add_ids(&ids);
             self.windows.steamcmd = true;
+        }
+    }
+
+    /// Запускает прогон сборки в игре.
+    fn start_test(&mut self) {
+        let prefix = self.effective_prefix();
+        let Some(prefix) = prefix else {
+            self.notice = Some((
+                "Не найден wine-префикс: укажите его в Настройки → Запуск.".to_string(),
+                true,
+            ));
+            return;
+        };
+        if self.settings.config_path.is_empty() {
+            self.notice = Some((
+                "Не задан путь к конфигу игры — прогону некуда положить сборку.".to_string(),
+                true,
+            ));
+            return;
+        }
+
+        let game = std::path::Path::new(&self.settings.game_path);
+        let config_dir = std::path::PathBuf::from(&self.settings.config_path);
+        // Лог кладём рядом с Player.log: под umu игра работает в контейнере
+        // со своим /tmp, и файл на произвольном пути хосту не виден.
+        let log_file = config_dir
+            .parent()
+            .unwrap_or(&config_dir)
+            .join("rustrim-quicktest.log");
+
+        let mut launch_settings = self.settings.launch.clone();
+        launch_settings.prefix = prefix.to_string_lossy().into_owned();
+        let mode = launch::Mode::QuickTest { log_file: log_file.clone() };
+        let plan = match launch::plan(game, &launch_settings, &mode) {
+            Ok(plan) => plan,
+            Err(e) => {
+                self.notice = Some((e.to_string(), true));
+                return;
+            }
+        };
+
+        let mut config = testing::Config::new(config_dir, log_file);
+        if let Some(exe) = paths::find_executable(game) {
+            config.cleanup = Some((prefix, exe.path().to_path_buf()));
+        }
+
+        match TestRun::start(plan.to_command(), plan.display(), config, self.profile.order()) {
+            Ok(run) => {
+                self.test_run = Some(run);
+                self.test_ui.reset();
+            }
+            Err(e) => self.notice = Some((format!("Не удалось запустить прогон: {e}"), true)),
+        }
+    }
+
+    fn effective_prefix(&mut self) -> Option<std::path::PathBuf> {
+        let configured = self.settings.launch.prefix.trim();
+        if !configured.is_empty() {
+            return Some(std::path::PathBuf::from(configured));
+        }
+        if self.detected_prefixes.is_empty() {
+            self.detected_prefixes = paths::find_prefixes();
+        }
+        self.detected_prefixes.first().map(|p| p.path.clone())
+    }
+
+    fn show_test(&mut self, ctx: &egui::Context) {
+        if let Some(run) = &mut self.test_run {
+            let finished = matches!(run.poll(), Phase::Done(_));
+            if finished {
+                // Разбор лога делается один раз, а не каждый кадр.
+                if !self.test_ui.issues_ready() {
+                    let issues = run.issues(&self.db, &self.profile);
+                    self.test_ui.set_issues(issues);
+                }
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            }
+        }
+
+        match test_panel::show(ctx, &mut self.test_ui, self.test_run.as_ref()) {
+            test_panel::Reply::None => {}
+            test_panel::Reply::Cancel => {
+                if let Some(run) = &mut self.test_run {
+                    run.cancel();
+                }
+            }
+            test_panel::Reply::Restart => self.start_test(),
+            test_panel::Reply::Select(id) => {
+                if self.db.contains(&id) {
+                    self.selected = Some(id);
+                }
+            }
         }
     }
 

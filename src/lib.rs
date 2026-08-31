@@ -12,6 +12,7 @@ pub mod process;
 pub mod settings;
 pub mod sorting;
 pub mod tags;
+pub mod testing;
 pub mod steam;
 pub mod ui;
 pub mod validation;

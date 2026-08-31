@@ -5,6 +5,16 @@ use super::{LogIssue, Severity};
 /// Максимум строк в одной записи (защита от «бесконечных» XML-дампов).
 const MAX_ENTRY_LINES: usize = 80;
 
+/// Строки, которые формально выглядят ошибкой, но встречаются в каждом
+/// запуске и к модам отношения не имеют.
+///
+/// «Fallback handler could not load library …» Mono печатает десятками при
+/// каждом старте — без этого фильтра любой прогон выглядел бы сбойным.
+const BENIGN: &[&str] = &[
+    "fallback handler could not load library",
+    "could not load signature of",
+];
+
 /// Определяет, начинается ли с этой строки запись об ошибке/предупреждении.
 /// Записи в Player.log не индентированы; кадры стека — индентированы.
 fn classify_start(line: &str) -> Option<Severity> {
@@ -12,6 +22,10 @@ fn classify_start(line: &str) -> Option<Severity> {
         return None;
     }
     let lower = line.to_lowercase();
+
+    if BENIGN.iter().any(|noise| lower.starts_with(noise)) {
+        return None;
+    }
 
     if lower.starts_with("warning") || lower.starts_with("[warning]") {
         return Some(Severity::Warning);

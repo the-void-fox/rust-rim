@@ -123,7 +123,10 @@ pub fn plan(
     }
 
     let windows_side = exe.needs_compat_layer() && !matches!(runner, Runner::Native);
-    let game_args = game_args(settings, mode, windows_side);
+    // Префикс нужен не только как переменная окружения: путь к логу
+    // приходится переводить относительно него.
+    let prefix = if windows_side { require_prefix(settings).ok() } else { None };
+    let game_args = game_args(settings, mode, windows_side, prefix.as_deref());
     let cwd = game_path.to_path_buf();
 
     match runner {
@@ -136,7 +139,7 @@ pub fn plan(
 
         Runner::Umu => {
             require_program("umu-run")?;
-            let prefix = require_prefix(settings)?;
+            let prefix = prefix.ok_or(LaunchError::NoPrefix)?;
             let mut env = vec![
                 ("WINEPREFIX".to_string(), prefix.to_string_lossy().into_owned()),
                 // umu опознаёт игру по GAMEID и подбирает свои правки.
@@ -156,7 +159,7 @@ pub fn plan(
 
         Runner::Wine => {
             require_program("wine")?;
-            let prefix = require_prefix(settings)?;
+            let prefix = prefix.ok_or(LaunchError::NoPrefix)?;
             let mut args = vec![exe.path().to_string_lossy().into_owned()];
             args.extend(game_args);
             Ok(Plan {
@@ -208,13 +211,18 @@ fn require_prefix(settings: &LaunchSettings) -> Result<PathBuf, LaunchError> {
         .ok_or(LaunchError::NoPrefix)
 }
 
-fn game_args(settings: &LaunchSettings, mode: &Mode, windows_side: bool) -> Vec<String> {
+fn game_args(
+    settings: &LaunchSettings,
+    mode: &Mode,
+    windows_side: bool,
+    prefix: Option<&Path>,
+) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
     if let Mode::QuickTest { log_file } = mode {
         args.push("-quicktest".to_string());
         args.push("-logfile".to_string());
         args.push(if windows_side {
-            to_wine_path(log_file)
+            to_wine_path(log_file, prefix)
         } else {
             log_file.to_string_lossy().into_owned()
         });
@@ -223,11 +231,21 @@ fn game_args(settings: &LaunchSettings, mode: &Mode, windows_side: bool) -> Vec<
     args
 }
 
-/// Путь для процесса внутри префикса: wine отображает корень на диск `Z:`.
+/// Переводит путь хоста в путь, понятный процессу внутри префикса.
 ///
-/// Без этого игра под Proton поняла бы `/tmp/x.log` как путь внутри
-/// `drive_c` и написала бы лог не туда, где мы его ждём.
-pub fn to_wine_path(path: &Path) -> String {
+/// Всё, что лежит в `drive_c` префикса, отображается на диск `C:` — такие
+/// файлы одинаково видны и игре, и нам. Остальное отображается на `Z:`
+/// (wine вешает туда корень файловой системы), но полагаться на это
+/// нельзя: umu запускает игру внутри контейнера pressure-vessel, где,
+/// например, `/tmp` свой собственный. Лог, записанный в `Z:\tmp`, на хосте
+/// просто не появляется — проверено.
+pub fn to_wine_path(path: &Path, prefix: Option<&Path>) -> String {
+    if let Some(prefix) = prefix {
+        let drive_c = prefix.join("drive_c");
+        if let Ok(rest) = path.strip_prefix(&drive_c) {
+            return format!("C:\\{}", rest.to_string_lossy().replace('/', "\\"));
+        }
+    }
     let text = path.to_string_lossy();
     if text.starts_with('/') {
         format!("Z:{}", text.replace('/', "\\"))
@@ -354,9 +372,33 @@ mod tests {
     }
 
     #[test]
-    fn wine_path_translation() {
-        assert_eq!(to_wine_path(Path::new("/tmp/a b/c.log")), "Z:\\tmp\\a b\\c.log");
-        assert_eq!(to_wine_path(Path::new("relative.log")), "relative.log");
+    fn quicktest_log_inside_prefix_uses_drive_c() {
+        let g = Game::windows("logprefix");
+        let mut s = settings(Runner::Wine);
+        s.prefix = "/prefixes/rimworld".into();
+        let log = PathBuf::from("/prefixes/rimworld/drive_c/users/x/rustrim.log");
+        let Ok(plan) = plan(&g.0, &s, &Mode::QuickTest { log_file: log }) else { return };
+        let at = plan.args.iter().position(|a| a == "-logfile").unwrap();
+        assert_eq!(plan.args[at + 1], "C:\\users\\x\\rustrim.log");
+    }
+
+    #[test]
+    fn paths_inside_the_prefix_map_to_drive_c() {
+        // Только такие файлы гарантированно видны и игре, и нам: под umu
+        // игра работает в контейнере со своим /tmp.
+        let prefix = Path::new("/prefixes/rimworld");
+        assert_eq!(
+            to_wine_path(Path::new("/prefixes/rimworld/drive_c/users/x/test.log"), Some(prefix)),
+            "C:\\users\\x\\test.log",
+        );
+    }
+
+    #[test]
+    fn paths_outside_the_prefix_fall_back_to_z_drive() {
+        let prefix = Path::new("/prefixes/rimworld");
+        assert_eq!(to_wine_path(Path::new("/tmp/a b/c.log"), Some(prefix)), "Z:\\tmp\\a b\\c.log");
+        assert_eq!(to_wine_path(Path::new("/tmp/x.log"), None), "Z:\\tmp\\x.log");
+        assert_eq!(to_wine_path(Path::new("relative.log"), None), "relative.log");
     }
 
     #[test]

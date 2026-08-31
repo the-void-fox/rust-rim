@@ -2,6 +2,7 @@
 
 pub mod launch;
 pub mod paths;
+pub mod teardown;
 
 pub use launch::{LaunchSettings, Mode, Plan, Runner};
 pub use paths::{Executable, Prefix};
