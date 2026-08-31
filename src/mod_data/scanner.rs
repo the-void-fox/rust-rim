@@ -4,11 +4,11 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-use crate::mod_data::{ModEntry, ModSource};
+use crate::mod_data::{ModEntry, ModId, ModSource};
 use super::parser::parse_about_xml;
 
-fn lower_ids(ids: Vec<String>) -> Vec<String> {
-    ids.into_iter().map(|s| s.to_lowercase()).collect()
+fn to_ids(ids: Vec<String>) -> Vec<ModId> {
+    ids.into_iter().map(ModId::from).collect()
 }
 
 /// Ищет превью-изображение в папке `mod_dir/About/` без учёта регистра.
@@ -38,7 +38,8 @@ fn find_preview_image(mod_dir: &Path) -> Option<std::path::PathBuf> {
 
 /// Поднимать при изменении формата ModEntry или логики парсинга —
 /// старый кэш будет отброшен целиком.
-const CACHE_VERSION: u32 = 1;
+/// v2: из ModEntry убран is_active (уехал в Profile).
+const CACHE_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize, Default)]
 struct ScanCache {
@@ -101,17 +102,16 @@ fn parse_mod_dir(mod_dir: &Path) -> Option<ModEntry> {
     match parse_about_xml(&about_xml) {
         Ok(data) => Some(ModEntry {
             name: if data.name.is_empty() { folder_name.clone() } else { data.name },
-            package_id: data.package_id.to_lowercase(),
+            package_id: ModId::new(&data.package_id),
             version: data.version,
             author: data.author,
             supported_versions: data.supported_versions,
             path: mod_dir.to_path_buf(),
             source: source_for_folder(&folder_name),
-            dependencies:      lower_ids(data.dependencies),
-            load_after:        lower_ids(data.load_after),
-            load_before:       lower_ids(data.load_before),
-            incompatible_with: lower_ids(data.incompatible_with),
-            is_active: false,
+            dependencies:      to_ids(data.dependencies),
+            load_after:        to_ids(data.load_after),
+            load_before:       to_ids(data.load_before),
+            incompatible_with: to_ids(data.incompatible_with),
             description: data.description,
             preview_path: find_preview_image(mod_dir),
         }),
@@ -158,7 +158,6 @@ pub fn scan_local_mods(mods_dir: &Path) -> Vec<ModEntry> {
                 if entry.preview_path.as_deref().map(|p| !p.exists()).unwrap_or(true) {
                     entry.preview_path = find_preview_image(dir);
                 }
-                entry.is_active = false;
                 result_slots[i] = Some(entry);
                 hits += 1;
             }
@@ -262,17 +261,16 @@ pub fn scan_dlc_mods(game_path: &Path) -> Vec<ModEntry> {
             Ok(data) => {
                 result.push(ModEntry {
                     name: if data.name.is_empty() { folder_name } else { data.name },
-                    package_id: data.package_id.to_lowercase(),
+                    package_id: ModId::new(&data.package_id),
                     version: data.version,
                     author: data.author,
                     supported_versions: data.supported_versions,
                     path: mod_dir.clone(),
                     source,
-                    dependencies:     lower_ids(data.dependencies),
-                    load_after:       lower_ids(data.load_after),
-                    load_before:      lower_ids(data.load_before),
-                    incompatible_with: lower_ids(data.incompatible_with),
-                    is_active: false,
+                    dependencies:     to_ids(data.dependencies),
+                    load_after:       to_ids(data.load_after),
+                    load_before:      to_ids(data.load_before),
+                    incompatible_with: to_ids(data.incompatible_with),
                     description: data.description,
                     preview_path: find_preview_image(&mod_dir),
                 });

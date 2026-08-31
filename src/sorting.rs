@@ -1,7 +1,7 @@
 use std::collections::{BinaryHeap, HashMap};
 use std::cmp::Reverse;
 use serde::Deserialize;
-use crate::mod_data::{ModEntry, ModSource};
+use crate::mod_data::{ModDb, ModEntry, ModId, ModSource, Profile};
 
 const COMMUNITY_RULES_URL: &str =
     "https://raw.githubusercontent.com/RimSort/Community-Rules-Database/main/communityRules.json";
@@ -140,11 +140,11 @@ fn dlc_release_index(package_id: &str) -> u8 {
 }
 
 fn has_loadbefore_core(m: &ModEntry, rules: Option<&CommunityRules>) -> bool {
-    if m.load_before.iter().any(|id| id == CORE_ID) {
+    if m.load_before.iter().any(|id| id.as_str() == CORE_ID) {
         return true;
     }
     rules
-        .and_then(|r| r.rules.get(&m.package_id))
+        .and_then(|r| r.rules.get(m.package_id.as_str()))
         .map(|r| r.load_before.iter().any(|id| id == CORE_ID))
         .unwrap_or(false)
 }
@@ -163,15 +163,19 @@ fn has_loadbefore_core(m: &ModEntry, rules: Option<&CommunityRules>) -> bool {
 /// - **Тир 5** — loadBottom-мода (RocketMan и т.п.) и зависимые от них мода
 ///
 /// Внутри тира тай-брейк — алфавитный порядок по имени мода.
-pub fn sort_active_mods(mods: &mut Vec<ModEntry>, rules: Option<&CommunityRules>) {
-    let positions: Vec<usize> = mods.iter().enumerate()
-        .filter(|(_, m)| m.is_active)
-        .map(|(i, _)| i)
-        .collect();
+pub fn sort_active_mods(profile: &mut Profile, db: &ModDb, rules: Option<&CommunityRules>) {
+    // Моды, которых нет в каталоге, сортировать нечем — держим их в хвосте,
+    // чтобы сортировка не меняла состав сборки.
+    let mut active: Vec<&ModEntry> = Vec::with_capacity(profile.len());
+    let mut unknown: Vec<ModId> = Vec::new();
+    for id in profile.order() {
+        match db.get(id) {
+            Some(m) => active.push(m),
+            None => unknown.push(id.clone()),
+        }
+    }
 
-    if positions.len() < 2 { return; }
-
-    let active: Vec<ModEntry> = positions.iter().map(|&i| mods[i].clone()).collect();
+    if active.len() < 2 { return; }
     let n = active.len();
 
     let id_to_local: HashMap<&str, usize> = active.iter().enumerate()
@@ -180,13 +184,13 @@ pub fn sort_active_mods(mods: &mut Vec<ModEntry>, rules: Option<&CommunityRules>
 
     // ── Базовые флаги loadTop / loadBottom из community rules ─────────────────
     let is_load_top: Vec<bool> = active.iter().map(|m| {
-        rules.and_then(|r| r.rules.get(&m.package_id))
+        rules.and_then(|r| r.rules.get(m.package_id.as_str()))
              .map(|r| r.load_top)
              .unwrap_or(false)
     }).collect();
 
     let is_load_bottom: Vec<bool> = active.iter().map(|m| {
-        rules.and_then(|r| r.rules.get(&m.package_id))
+        rules.and_then(|r| r.rules.get(m.package_id.as_str()))
              .map(|r| r.load_bottom)
              .unwrap_or(false)
     }).collect();
@@ -216,7 +220,7 @@ pub fn sort_active_mods(mods: &mut Vec<ModEntry>, rules: Option<&CommunityRules>
             }
         }
         // Правила сообщества
-        if let Some(rule) = rules.and_then(|r| r.rules.get(&m.package_id)) {
+        if let Some(rule) = rules.and_then(|r| r.rules.get(m.package_id.as_str())) {
             for id in &rule.load_after {
                 if let Some(&dep) = id_to_local.get(id.as_str()) {
                     add_edge(dep, idx);
@@ -326,7 +330,7 @@ pub fn sort_active_mods(mods: &mut Vec<ModEntry>, rules: Option<&CommunityRules>
         if is_pre_core[idx] { return (0, 0); }
         match &active[idx].source {
             ModSource::Core   => (1, 0),
-            ModSource::DLC(_) => (2, dlc_release_index(&active[idx].package_id)),
+            ModSource::DLC(_) => (2, dlc_release_index(active[idx].package_id.as_str())),
             _ if is_framework[idx]         => (3, 0),
             _ if is_load_bottom_exp[idx]   => (5, 0),
             _                              => (4, 0),
@@ -373,8 +377,9 @@ pub fn sort_active_mods(mods: &mut Vec<ModEntry>, rules: Option<&CommunityRules>
     }
     sorted.extend(remaining);
 
-    let sorted_mods: Vec<ModEntry> = sorted.iter().map(|&i| active[i].clone()).collect();
-    for (pos, entry) in positions.iter().zip(sorted_mods) {
-        mods[*pos] = entry;
-    }
+    let mut new_order: Vec<ModId> = sorted.iter()
+        .map(|&i| active[i].package_id.clone())
+        .collect();
+    new_order.append(&mut unknown);
+    profile.set_order(new_order);
 }

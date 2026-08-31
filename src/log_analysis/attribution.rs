@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::mod_data::ModEntry;
+use crate::mod_data::{ModDb, ModEntry, ModId, Profile};
 use super::{LogIssue, Suspect};
 
 // Веса сигналов
@@ -25,7 +25,7 @@ const VANILLA: &[&str] = &[
 
 #[derive(Clone)]
 struct ModRef {
-    package_id: String,
+    package_id: ModId,
     name: String,
     is_active: bool,
 }
@@ -72,15 +72,15 @@ fn collect_dll_stems(mod_dir: &Path) -> Vec<String> {
 
 impl ModIndex {
     /// Строит индекс по установленным модам (читает Assemblies/ с диска).
-    pub fn build(mods: &[ModEntry]) -> Self {
-        let parts: Vec<(&ModEntry, Vec<String>)> = mods.iter()
+    pub fn build(db: &ModDb, profile: &Profile) -> Self {
+        let parts: Vec<(&ModEntry, Vec<String>)> = db.iter()
             .map(|m| (m, collect_dll_stems(&m.path)))
             .collect();
-        Self::build_with_dlls(&parts)
+        Self::build_with_dlls(&parts, profile)
     }
 
     /// Строит индекс из готовых списков DLL (для тестов и фонового потока).
-    pub fn build_with_dlls(parts: &[(&ModEntry, Vec<String>)]) -> Self {
+    pub fn build_with_dlls(parts: &[(&ModEntry, Vec<String>)], profile: &Profile) -> Self {
         let mut refs = Vec::with_capacity(parts.len());
         let mut dll: HashMap<String, usize> = HashMap::new();
         let mut folder: HashMap<String, usize> = HashMap::new();
@@ -91,13 +91,13 @@ impl ModIndex {
             refs.push(ModRef {
                 package_id: m.package_id.clone(),
                 name: m.name.clone(),
-                is_active: m.is_active,
+                is_active: profile.is_active(&m.package_id),
             });
             if let Some(f) = m.path.file_name().and_then(|s| s.to_str()) {
                 folder.insert(f.to_lowercase(), i);
             }
-            if m.package_id.len() >= 6 {
-                packages.push((m.package_id.to_lowercase(), i));
+            if m.package_id.as_str().len() >= 6 {
+                packages.push((m.package_id.as_str().to_string(), i));
             }
             if m.name.len() >= 8 {
                 names.push((m.name.clone(), i));

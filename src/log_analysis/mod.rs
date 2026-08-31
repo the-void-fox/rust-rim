@@ -23,7 +23,7 @@ pub enum Severity {
 /// Подозреваемый мод с накопленным счётом и уликами.
 #[derive(Clone, Debug)]
 pub struct Suspect {
-    pub package_id: String,
+    pub package_id: crate::mod_data::ModId,
     pub name: String,
     pub is_active: bool,
     pub score: i32,

@@ -3,7 +3,7 @@ use std::sync::mpsc;
 
 use egui::{Frame, Margin, RichText, Stroke, Vec2};
 
-use crate::app::theme;
+use crate::ui::theme;
 use crate::steam::workshop_api::{self, CollectionItem, SortOrder, WorkshopItem};
 
 // ─── Tab ─────────────────────────────────────────────────────────────────────

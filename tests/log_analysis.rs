@@ -1,12 +1,12 @@
 // Тесты анализатора логов RimWorld: разбор Player.log и атрибуция виновников.
 
 use rust_rim::log_analysis::{analyze, parse_log, ModIndex, Severity};
-use rust_rim::mod_data::{ModEntry, ModSource};
+use rust_rim::mod_data::{ModEntry, ModId, ModSource, Profile};
 
-fn fake_mod(name: &str, package_id: &str, folder: &str, active: bool) -> ModEntry {
+fn fake_mod(name: &str, package_id: &str, folder: &str) -> ModEntry {
     ModEntry {
         name: name.to_string(),
-        package_id: package_id.to_string(),
+        package_id: ModId::new(package_id),
         version: String::new(),
         author: "author".into(),
         supported_versions: vec!["1.6".into()],
@@ -16,7 +16,6 @@ fn fake_mod(name: &str, package_id: &str, folder: &str, active: bool) -> ModEntr
         load_after: Vec::new(),
         load_before: Vec::new(),
         incompatible_with: Vec::new(),
-        is_active: active,
         description: String::new(),
         preview_path: None,
     }
@@ -79,32 +78,37 @@ fn parses_and_groups() {
 #[test]
 fn attributes_suspects() {
     let mods = vec![
-        fake_mod("Vanilla Furniture Expanded", "vanillaexpanded.vfecore", "VFECore", true),
-        fake_mod("Cool Chairs Pack", "cool.chairs.pack", "CoolChairs", true),
-        fake_mod("Unrelated Mod Here", "some.other.mod", "Unrelated", false),
+        fake_mod("Vanilla Furniture Expanded", "vanillaexpanded.vfecore", "VFECore"),
+        fake_mod("Cool Chairs Pack", "cool.chairs.pack", "CoolChairs"),
+        fake_mod("Unrelated Mod Here", "some.other.mod", "Unrelated"),
     ];
+    // Третий мод в сборку не входит — подозреваемый должен помечаться неактивным.
+    let mut profile = Profile::new();
+    profile.activate(mods[0].package_id.clone());
+    profile.activate(mods[1].package_id.clone());
+
     let parts: Vec<(&ModEntry, Vec<String>)> = vec![
         (&mods[0], vec!["VanillaFurnitureExpanded".into()]),
         (&mods[1], vec!["CoolChairs".into()]),
         (&mods[2], vec!["UnrelatedAssembly".into()]),
     ];
-    let index = ModIndex::build_with_dlls(&parts);
+    let index = ModIndex::build_with_dlls(&parts, &profile);
     let issues = analyze(SAMPLE_LOG, &index);
 
     // 1. Неймспейс стека → DLL мода
     let inspect = issues.iter().find(|i| i.title.contains("MainTabWindow_Inspect")).unwrap();
     let top = inspect.suspects.first().expect("нет подозреваемых по стеку");
-    assert_eq!(top.package_id, "vanillaexpanded.vfecore", "suspects: {:?}", inspect.suspects);
+    assert_eq!(top.package_id.as_str(), "vanillaexpanded.vfecore", "suspects: {:?}", inspect.suspects);
     assert!(top.evidence.iter().any(|e| e.contains("стек")), "{:?}", top.evidence);
 
     // 2. Путь …/Mods/<папка>/… → мод
     let texture = issues.iter().find(|i| i.title.contains("Could not load UnityEngine.Texture2D")).unwrap();
     let top = texture.suspects.first().expect("нет подозреваемых по пути");
-    assert_eq!(top.package_id, "cool.chairs.pack", "suspects: {:?}", texture.suspects);
+    assert_eq!(top.package_id.as_str(), "cool.chairs.pack", "suspects: {:?}", texture.suspects);
 
     // 3. packageId в тексте cross-reference ошибки
     let xref = issues.iter().find(|i| i.title.contains("cross-reference")).unwrap();
-    assert!(xref.suspects.iter().any(|s| s.package_id == "cool.chairs.pack"),
+    assert!(xref.suspects.iter().any(|s| s.package_id.as_str() == "cool.chairs.pack"),
         "suspects: {:?}", xref.suspects);
 
     // 4. Ванильный стек с Harmony-патчем → подсказка, а не ложный виновник
@@ -115,7 +119,7 @@ fn attributes_suspects() {
 
     // Непричастный мод нигде не всплывает
     assert!(!issues.iter().flat_map(|i| &i.suspects)
-        .any(|s| s.package_id == "some.other.mod"));
+        .any(|s| s.package_id.as_str() == "some.other.mod"));
 
     // Ошибки идут раньше предупреждений
     let first_warn = issues.iter().position(|i| i.severity == Severity::Warning);

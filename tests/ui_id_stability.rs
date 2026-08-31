@@ -7,8 +7,9 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use rust_rim::app::{ListCaches, MoveRequest, SearchState};
-use rust_rim::mod_data::{ModEntry, ModSource};
+use rust_rim::app::Action;
+use rust_rim::mod_data::{ModDb, ModEntry, ModId, ModSource, Profile};
+use rust_rim::ui::list_cache::{ListCaches, SearchState};
 use rust_rim::ui::mod_list::ModList;
 
 // ─── Логгер-счётчик ──────────────────────────────────────────────────────────
@@ -39,21 +40,32 @@ static LOGGER: CountingLogger = CountingLogger;
 
 // ─── Тестовые данные ─────────────────────────────────────────────────────────
 
-fn fake_mod(i: usize, active: bool) -> ModEntry {
+fn mod_id(i: usize) -> ModId {
+    ModId::new(&format!("author{}.mod{}", i % 40, i))
+}
+
+fn fake_mod(i: usize) -> ModEntry {
     ModEntry {
         name: format!("Mod number {i} with a reasonably long name"),
-        package_id: format!("author{}.mod{}", i % 40, i),
+        package_id: mod_id(i),
         version: if i % 3 == 0 { String::new() } else { format!("1.{}.{}", i % 6, i % 10) },
         author: format!("Author {}", i % 40),
         supported_versions: vec!["1.5".into(), "1.6".into()],
         path: std::path::PathBuf::from(format!("/tmp/fake/{i}")),
         source: if i % 4 == 0 { ModSource::Workshop(1000 + i as u64) } else { ModSource::Local },
         // Часть зависимостей заведомо отсутствует — чтобы warn-флаги были в деле
-        dependencies: if i % 7 == 0 { vec![format!("author0.mod{}", i + 1), "missing.dep".into()] } else { Vec::new() },
+        dependencies: if i % 7 == 0 {
+            vec![ModId::new(&format!("author0.mod{}", i + 1)), ModId::new("missing.dep")]
+        } else {
+            Vec::new()
+        },
         load_after: Vec::new(),
         load_before: Vec::new(),
-        incompatible_with: if i % 11 == 0 { vec![format!("author{}.mod{}", (i + 1) % 40, i + 1)] } else { Vec::new() },
-        is_active: active,
+        incompatible_with: if i % 11 == 0 {
+            vec![ModId::new(&format!("author{}.mod{}", (i + 1) % 40, i + 1))]
+        } else {
+            Vec::new()
+        },
         description: String::new(),
         preview_path: None,
     }
@@ -61,40 +73,64 @@ fn fake_mod(i: usize, active: bool) -> ModEntry {
 
 struct Harness {
     ctx: egui::Context,
-    mods: Vec<ModEntry>,
+    db: ModDb,
+    profile: Profile,
     caches: ListCaches,
     search: SearchState,
-    selected: Option<usize>,
+    selected: Option<ModId>,
 }
 
 impl Harness {
     fn new(n: usize) -> Self {
         let ctx = egui::Context::default();
-        let mods: Vec<ModEntry> = (0..n).map(|i| fake_mod(i, i % 2 == 0)).collect();
-        Self { ctx, mods, caches: ListCaches::default(), search: SearchState::default(), selected: None }
+        let db = ModDb::build((0..n).map(fake_mod).collect());
+        let mut profile = Profile::new();
+        for i in (0..n).filter(|i| i % 2 == 0) {
+            profile.activate(mod_id(i));
+        }
+        Self {
+            ctx,
+            db,
+            profile,
+            caches: ListCaches::default(),
+            search: SearchState::default(),
+            selected: None,
+        }
     }
 
-    fn frame(&mut self, events: Vec<egui::Event>) -> Option<MoveRequest> {
+    /// Переключает активность мода — сдвигает все строки обоих списков.
+    fn toggle(&mut self, i: usize) {
+        let id = mod_id(i);
+        if self.profile.is_active(&id) {
+            self.profile.deactivate(&id);
+        } else {
+            self.profile.activate(id);
+        }
+        self.caches.invalidate();
+    }
+
+    fn frame(&mut self, events: Vec<egui::Event>) -> Option<Action> {
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))),
             events,
             ..Default::default()
         };
-        let mods = &self.mods;
+        let db = &self.db;
+        let profile = &self.profile;
         let caches = &mut self.caches;
         let search = &self.search;
         let selected = &mut self.selected;
         let mut req = None;
         let _ = self.ctx.run_ui(input, |root| {
-            caches.refresh(mods, search);
+            caches.refresh(db, profile, search);
             egui::CentralPanel::default().show(root, |ui| {
                 ui.columns(2, |cols| {
-                    if let Some(r) = ModList::new(mods, &caches.inactive, &caches.warn, selected, false)
+                    if let Some(r) = ModList::new(db, &caches.inactive, &caches.warn, selected, false)
                         .show(&mut cols[0]) {
                         req = Some(r);
                     }
-                    if let Some(r) = ModList::new(mods, &caches.active, &caches.warn, selected, true)
+                    if let Some(r) = ModList::new(db, &caches.active, &caches.warn, selected, true)
                         .show(&mut cols[1]) {
                         req = Some(r);
                     }
@@ -162,8 +198,7 @@ fn no_widget_id_warnings() {
 
     // 4. Мутации списка: активация/деактивация сдвигает все строки.
     for i in [0usize, 2, 4, 6, 100, 102] {
-        h.mods[i].is_active = !h.mods[i].is_active;
-        h.caches.invalidate();
+        h.toggle(i);
         for _ in 0..3 {
             h.frame(vec![pointer(300.0, 400.0)]);
         }
@@ -194,7 +229,7 @@ fn rows_are_clickable() {
     for _ in 0..3 {
         h.frame(vec![pointer(100.0, 45.0)]);
     }
-    let expected = h.caches.inactive.first().copied();
+    let expected = h.caches.inactive.first().cloned();
     assert!(expected.is_some(), "в тестовых данных нет неактивных модов");
 
     // Клик по первой строке левого списка: y = отступ панели (8) +

@@ -1,10 +1,15 @@
+use std::collections::HashMap;
+
 use egui::{
     Align2, Color32, FontId, Id, Pos2, Rect, RichText, Sense, Ui, Vec2,
     text::LayoutJob, epaint::text::TextWrapping,
 };
 
-use crate::app::{source_color, source_label, theme, DragPayload, MoveRequest, RowWarn};
-use crate::mod_data::{ModEntry, ModSource};
+use crate::app::{Action, DragPayload};
+use crate::ui::list_cache::RowWarn;
+use crate::mod_data::{ModDb, ModId, ModSource};
+use crate::ui::details::{source_color, source_label};
+use crate::ui::theme;
 
 pub const ROW_HEIGHT: f32 = 22.0;
 
@@ -23,25 +28,25 @@ const DRAG_SCROLL_SPEED: f32 = 9.0;
 // Это же делает кадр дешёвым: ~40 видимых строк = ~40 виджетов вместо 4+ на строку.
 
 pub struct ModList<'a> {
-    mods:      &'a [ModEntry],
-    indices:   &'a [usize],
-    warn:      &'a [RowWarn],
-    selected:  &'a mut Option<usize>,
+    db:        &'a ModDb,
+    ids:       &'a [ModId],
+    warn:      &'a HashMap<ModId, RowWarn>,
+    selected:  &'a mut Option<ModId>,
     is_active: bool,
 }
 
 impl<'a> ModList<'a> {
     pub fn new(
-        mods:      &'a [ModEntry],
-        indices:   &'a [usize],
-        warn:      &'a [RowWarn],
-        selected:  &'a mut Option<usize>,
+        db:        &'a ModDb,
+        ids:       &'a [ModId],
+        warn:      &'a HashMap<ModId, RowWarn>,
+        selected:  &'a mut Option<ModId>,
         is_active: bool,
     ) -> Self {
-        Self { mods, indices, warn, selected, is_active }
+        Self { db, ids, warn, selected, is_active }
     }
 
-    pub fn show(self, ui: &mut Ui) -> Option<MoveRequest> {
+    pub fn show(self, ui: &mut Ui) -> Option<Action> {
         let ctx = ui.ctx().clone();
         let panel_key = if self.is_active { "active_list" } else { "inactive_list" };
 
@@ -49,14 +54,14 @@ impl<'a> ModList<'a> {
 
         let spacing_y = ui.spacing().item_spacing.y;
         let pitch     = ROW_HEIGHT + spacing_y;
-        let num_rows  = self.indices.len();
+        let num_rows  = self.ids.len();
 
         let is_dragging = egui::DragAndDrop::has_any_payload(&ctx);
-        let dragged_idx: Option<usize> =
-            egui::DragAndDrop::payload::<DragPayload>(&ctx).map(|p| p.orig_idx);
+        let dragged_id: Option<ModId> =
+            egui::DragAndDrop::payload::<DragPayload>(&ctx).map(|p| p.id.clone());
         let pointer = ctx.pointer_latest_pos();
 
-        let mut move_request: Option<MoveRequest> = None;
+        let mut action: Option<Action> = None;
 
         egui::ScrollArea::vertical()
             .id_salt(panel_key)
@@ -112,9 +117,9 @@ impl<'a> ModList<'a> {
                 let accent = if self.is_active { theme::HEADER_RIGHT } else { theme::HEADER_LEFT };
 
                 for row_pos in first..last {
-                    let orig_idx = self.indices[row_pos];
-                    let m = &self.mods[orig_idx];
-                    let rw = self.warn.get(orig_idx).copied().unwrap_or_default();
+                    let id = &self.ids[row_pos];
+                    let Some(m) = self.db.get(id) else { continue };
+                    let rw = self.warn.get(id).copied().unwrap_or_default();
 
                     let row_top = content_top + row_pos as f32 * pitch;
                     let rect = Rect::from_min_size(
@@ -123,11 +128,11 @@ impl<'a> ModList<'a> {
                     );
 
                     // Id — функция экранного rect'а: стабилен между проходами.
-                    let id = Id::new((panel_key, rect.top() as i32));
-                    let resp = ui.interact(rect, id, Sense::click_and_drag());
+                    let widget_id = Id::new((panel_key, rect.top() as i32));
+                    let resp = ui.interact(rect, widget_id, Sense::click_and_drag());
 
-                    let is_selected      = *self.selected == Some(orig_idx);
-                    let is_being_dragged = dragged_idx == Some(orig_idx);
+                    let is_selected      = self.selected.as_ref() == Some(id);
+                    let is_being_dragged = dragged_id.as_ref() == Some(id);
                     let is_hovered       = !is_dragging && resp.hovered() && !is_selected;
 
                     let has_incompat     = rw.incompat;
@@ -242,16 +247,16 @@ impl<'a> ModList<'a> {
 
                     // ── Интеракции ───────────────────────────────────────
                     if resp.drag_started() {
-                        egui::DragAndDrop::set_payload(&ctx, DragPayload { orig_idx });
+                        egui::DragAndDrop::set_payload(&ctx, DragPayload { id: id.clone() });
                     }
                     if resp.clicked() {
-                        *self.selected = Some(orig_idx);
+                        *self.selected = Some(id.clone());
                     }
                     if resp.double_clicked() {
-                        move_request = Some(if self.is_active {
-                            MoveRequest::Deactivate(orig_idx)
+                        action = Some(if self.is_active {
+                            Action::Deactivate(id.clone())
                         } else {
-                            MoveRequest::Activate(orig_idx)
+                            Action::Activate(id.clone())
                         });
                     }
 
@@ -279,25 +284,25 @@ impl<'a> ModList<'a> {
                         ui.separator();
                         if self.is_active {
                             if ui.button("⬅  Деактивировать").clicked() {
-                                move_request = Some(MoveRequest::Deactivate(orig_idx));
+                                action = Some(Action::Deactivate(id.clone()));
                                 ui.close();
                             }
                             ui.separator();
                             if ui.button("⬆  Переместить вверх").clicked() {
-                                move_request = Some(MoveRequest::MoveUp(orig_idx));
+                                action = Some(Action::MoveUp(id.clone()));
                                 ui.close();
                             }
                             if ui.button("⬇  Переместить вниз").clicked() {
-                                move_request = Some(MoveRequest::MoveDown(orig_idx));
+                                action = Some(Action::MoveDown(id.clone()));
                                 ui.close();
                             }
                         } else if ui.button("➡  Активировать").clicked() {
-                            move_request = Some(MoveRequest::Activate(orig_idx));
+                            action = Some(Action::Activate(id.clone()));
                             ui.close();
                         }
                         ui.separator();
                         if ui.button("📁  Открыть папку").clicked() {
-                            move_request = Some(MoveRequest::OpenFolder(orig_idx));
+                            action = Some(Action::OpenFolder(id.clone()));
                             ui.close();
                         }
                     });
@@ -313,9 +318,9 @@ impl<'a> ModList<'a> {
 
                 // ── Отпускание перетаскивания над этим списком ───────────
                 if is_dragging && ctx.input(|i| i.pointer.primary_released()) {
-                    if let (Some(drop_pos), Some(payload_idx)) = (drop_row, dragged_idx) {
-                        move_request = Some(MoveRequest::DragDrop {
-                            orig_idx:  payload_idx,
+                    if let (Some(drop_pos), Some(id)) = (drop_row, dragged_id.clone()) {
+                        action = Some(Action::DragDrop {
+                            id,
                             to_active: self.is_active,
                             to_pos:    drop_pos,
                         });
@@ -324,7 +329,7 @@ impl<'a> ModList<'a> {
                 }
             });
 
-        move_request
+        action
     }
 }
 

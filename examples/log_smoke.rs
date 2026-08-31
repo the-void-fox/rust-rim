@@ -1,16 +1,17 @@
 // Отладка анализатора логов на реальных модах:
 //   cargo run --example log_smoke -- <папка модов> <файл лога>
 use rust_rim::log_analysis::{analyze, ModIndex};
-use rust_rim::mod_data::scan_local_mods;
+use rust_rim::mod_data::{ModDb, Profile, scan_local_mods};
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let mods_dir = args.next().expect("usage: log_smoke <mods_dir> <log_file>");
     let log_file = args.next().expect("usage: log_smoke <mods_dir> <log_file>");
 
-    let mods = scan_local_mods(std::path::Path::new(&mods_dir));
-    println!("Модов: {}", mods.len());
-    let index = ModIndex::build(&mods);
+    let db = ModDb::build(scan_local_mods(std::path::Path::new(&mods_dir)));
+    println!("Модов: {}", db.len());
+    // Смоук гоняется без сборки: все моды считаются неактивными.
+    let index = ModIndex::build(&db, &Profile::new());
     let text = std::fs::read_to_string(&log_file)?;
 
     for issue in analyze(&text, &index) {

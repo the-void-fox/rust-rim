@@ -1,7 +1,7 @@
 use egui::{Align2, Button, Context, Frame, Margin, RichText, Stroke, Window};
 
-use crate::mod_data::ModEntry;
-use crate::app::{theme, AppSettings, SettingsTab};
+use crate::settings::{AppSettings, SettingsTab};
+use crate::ui::theme;
 
 /// Открывает нативный диалог выбора папки и возвращает путь как строку.
 fn pick_folder(title: &str) -> Option<String> {
@@ -146,10 +146,15 @@ pub fn open_folder_dialog(ctx: &Context, open: &mut bool, settings: &mut AppSett
 }
 
 /// Возвращает `true`, если пользователь подтвердил сохранение.
-pub fn save_dialog(ctx: &Context, open: &mut bool, mods: &[ModEntry], config_path: &str) -> bool {
+pub fn save_dialog(
+    ctx: &Context,
+    open: &mut bool,
+    active_count: usize,
+    total_count: usize,
+    config_path: &str,
+) -> bool {
     if !*open { return false; }
 
-    let active_count = mods.iter().filter(|m| m.is_active).count();
     let mut save_confirmed = false;
 
     Window::new(RichText::new("💾  Сохранить список модов").color(theme::TEXT_PRIMARY).size(13.0).strong())
@@ -173,7 +178,7 @@ pub fn save_dialog(ctx: &Context, open: &mut bool, mods: &[ModEntry], config_pat
                             .color(theme::ACTIVE_GREEN).size(12.0).strong());
                         ui.add_space(12.0);
                         ui.label(RichText::new("Всего:").color(theme::TEXT_MUTED).size(12.0));
-                        ui.label(RichText::new(format!("{}", mods.len()))
+                        ui.label(RichText::new(format!("{}", total_count))
                             .color(theme::TEXT_PRIMARY).size(12.0).strong());
                     });
                 });

@@ -1,7 +1,7 @@
 use egui::{Color32, Frame, Margin, RichText, ScrollArea, Stroke};
 use std::sync::mpsc;
 
-use crate::app::theme;
+use crate::ui::theme;
 use crate::steam::steamcmd;
 
 const LOG_MAX: usize = 300;

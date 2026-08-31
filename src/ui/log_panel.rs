@@ -1,28 +1,21 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::mpsc;
 
 use egui::{Frame, Margin, RichText, Stroke};
 
-use crate::app::theme;
+use crate::job::Job;
 use crate::log_analysis::{analyze, LogIssue, ModIndex, Severity};
-use crate::mod_data::ModEntry;
+use crate::mod_data::{ModDb, ModEntry, ModId, Profile};
+use crate::ui::theme;
 
 /// Логи больше этого размера читаются с хвоста (старое обрезается).
 const MAX_LOG_BYTES: usize = 32 * 1024 * 1024;
-
-enum State {
-    Idle,
-    Working(mpsc::Receiver<Result<Vec<LogIssue>, String>>),
-    Done(Vec<LogIssue>),
-    Error(String),
-}
 
 /// Окно «Анализ логов»: разбирает Player.log и показывает ошибки
 /// с предполагаемыми модами-виновниками.
 pub struct LogPanel {
     path: Option<PathBuf>,
-    state: State,
+    job: Job<Vec<LogIssue>>,
     only_with_suspects: bool,
     show_warnings: bool,
     expanded: HashSet<usize>,
@@ -33,7 +26,7 @@ impl LogPanel {
     pub fn new() -> Self {
         Self {
             path: None,
-            state: State::Idle,
+            job: Job::Idle,
             only_with_suspects: false,
             show_warnings: true,
             expanded: HashSet::new(),
@@ -41,14 +34,15 @@ impl LogPanel {
         }
     }
 
-    /// Возвращает package_id мода, если пользователь кликнул по подозреваемому.
+    /// Возвращает идентификатор мода, если пользователь кликнул по подозреваемому.
     pub fn show(
         &mut self,
         ctx: &egui::Context,
         open: &mut bool,
-        mods: &[ModEntry],
+        db: &ModDb,
+        profile: &Profile,
         saved_path: &mut String,
-    ) -> Option<String> {
+    ) -> Option<ModId> {
         if !*open {
             return None;
         }
@@ -64,16 +58,16 @@ impl LogPanel {
         if !self.auto_started {
             self.auto_started = true;
             if self.path.is_some() {
-                self.start_analysis(mods);
+                self.start_analysis(db, profile);
             }
         }
 
-        self.poll();
-        if matches!(self.state, State::Working(_)) {
+        self.job.poll();
+        if self.job.is_running() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 
-        let mut selected: Option<String> = None;
+        let mut selected: Option<ModId> = None;
         egui::Window::new("📜  Анализ логов RimWorld")
             .open(open)
             .collapsible(false)
@@ -86,48 +80,35 @@ impl LogPanel {
                     .stroke(Stroke::new(1.0, theme::BORDER_ACCENT)),
             )
             .show(ctx, |ui| {
-                selected = self.content(ui, mods, saved_path);
+                selected = self.content(ui, db, profile, saved_path);
             });
         selected
     }
 
-    fn poll(&mut self) {
-        if let State::Working(rx) = &self.state {
-            if let Ok(res) = rx.try_recv() {
-                self.state = match res {
-                    Ok(issues) => State::Done(issues),
-                    Err(e) => State::Error(e),
-                };
-            }
-        }
-    }
-
-    fn start_analysis(&mut self, mods: &[ModEntry]) {
+    fn start_analysis(&mut self, db: &ModDb, profile: &Profile) {
         let Some(path) = self.path.clone() else { return };
-        let mods_snapshot: Vec<ModEntry> = mods.to_vec();
-        let (tx, rx) = mpsc::channel();
-        self.state = State::Working(rx);
+        let entries: Vec<ModEntry> = db.iter().cloned().collect();
+        let profile = profile.clone();
         self.expanded.clear();
-        std::thread::spawn(move || {
-            let res = (|| -> Result<Vec<LogIssue>, String> {
-                let bytes = std::fs::read(&path)
-                    .map_err(|e| format!("Не удалось прочитать {}: {e}", path.display()))?;
-                let start = bytes.len().saturating_sub(MAX_LOG_BYTES);
-                let text = String::from_utf8_lossy(&bytes[start..]);
-                // Индекс строится здесь же: скан Assemblies/ — дисковый ввод-вывод
-                let index = ModIndex::build(&mods_snapshot);
-                Ok(analyze(&text, &index))
-            })();
-            let _ = tx.send(res);
+        self.job = Job::spawn(move || {
+            let bytes = std::fs::read(&path)
+                .map_err(|e| format!("Не удалось прочитать {}: {e}", path.display()))?;
+            let start = bytes.len().saturating_sub(MAX_LOG_BYTES);
+            let text = String::from_utf8_lossy(&bytes[start..]);
+            // Индекс строится здесь же: скан Assemblies/ — дисковый ввод-вывод
+            let db = ModDb::build(entries);
+            let index = ModIndex::build(&db, &profile);
+            Ok(analyze(&text, &index))
         });
     }
 
     fn content(
         &mut self,
         ui: &mut egui::Ui,
-        mods: &[ModEntry],
+        db: &ModDb,
+        profile: &Profile,
         saved_path: &mut String,
-    ) -> Option<String> {
+    ) -> Option<ModId> {
         let mut selected = None;
 
         // ── Панель управления ────────────────────────────────────────────
@@ -142,14 +123,14 @@ impl LogPanel {
             ).on_hover_text(&path_label);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let busy = matches!(self.state, State::Working(_));
+                let busy = self.job.is_running();
                 if busy {
                     ui.spinner();
                 }
                 if ui.add_enabled(!busy && self.path.is_some(), egui::Button::new("⟳ Обновить"))
                     .clicked()
                 {
-                    self.start_analysis(mods);
+                    self.start_analysis(db, profile);
                 }
                 if ui.button("📂 Выбрать…").clicked() {
                     let mut dlg = rfd::FileDialog::new()
@@ -160,7 +141,7 @@ impl LogPanel {
                     if let Some(picked) = dlg.pick_file() {
                         *saved_path = picked.display().to_string();
                         self.path = Some(picked);
-                        self.start_analysis(mods);
+                        self.start_analysis(db, profile);
                     }
                 }
             });
@@ -172,7 +153,7 @@ impl LogPanel {
             ui.checkbox(&mut self.show_warnings,
                 RichText::new("Показывать предупреждения").size(11.0));
 
-            if let State::Done(issues) = &self.state {
+            if let Some(issues) = self.job.result() {
                 let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
                 let warns = issues.len() - errors;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -186,25 +167,25 @@ impl LogPanel {
         ui.separator();
 
         // ── Результаты ───────────────────────────────────────────────────
-        match &self.state {
-            State::Idle => {
+        match &self.job {
+            Job::Idle => {
                 ui.add_space(20.0);
                 ui.vertical_centered(|ui| {
                     ui.label(RichText::new("Выберите файл лога (Player.log)")
                         .color(theme::TEXT_MUTED).italics());
                 });
             }
-            State::Working(_) => {
+            Job::Running(_) => {
                 ui.add_space(20.0);
                 ui.vertical_centered(|ui| {
                     ui.label(RichText::new("Анализ лога…").color(theme::TEXT_MUTED));
                 });
             }
-            State::Error(e) => {
+            Job::Failed(e) => {
                 ui.add_space(20.0);
                 ui.colored_label(theme::ERROR_RED, e);
             }
-            State::Done(issues) => {
+            Job::Done(issues) => {
                 let issues: Vec<(usize, &LogIssue)> = issues.iter().enumerate()
                     .filter(|(_, i)| self.show_warnings || i.severity == Severity::Error)
                     .filter(|(_, i)| !self.only_with_suspects || !i.suspects.is_empty())
@@ -246,14 +227,14 @@ impl LogPanel {
     }
 }
 
-/// Рисует одну запись; возвращает package_id при клике на подозреваемого.
+/// Рисует одну запись; возвращает идентификатор мода при клике на подозреваемого.
 fn draw_issue(
     ui: &mut egui::Ui,
     idx: usize,
     issue: &LogIssue,
     expanded: bool,
     toggle: &mut Option<usize>,
-) -> Option<String> {
+) -> Option<ModId> {
     let mut selected = None;
 
     let (mark, mark_color) = match issue.severity {
