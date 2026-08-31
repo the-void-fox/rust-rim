@@ -14,3 +14,4 @@ pub mod sorting;
 pub mod tags;
 pub mod steam;
 pub mod ui;
+pub mod validation;

@@ -24,6 +24,7 @@ use crate::ui::duplicates::DuplicatesUi;
 use crate::ui::list_cache::{ListCaches, SearchState};
 use crate::ui::tags_panel::TagsUi;
 use crate::ui::launch_panel;
+use crate::ui::validation_panel::{self, ValidationUi};
 use crate::ui::log_panel::LogPanel;
 use crate::ui::mod_list::ModList;
 use crate::ui::preview::Preview;
@@ -105,6 +106,11 @@ pub struct RustRim {
     tags: Tags,
     tags_ui: TagsUi,
 
+    /// Проверка сборки: диагностики и окно с ними.
+    validation: ValidationUi,
+    /// Версия игры из Version.txt — нужна для проверки supportedVersions.
+    game_version: Option<String>,
+
     /// Найденные wine-префиксы (обновляются при открытии настроек).
     detected_prefixes: Vec<Prefix>,
     /// Запущенная игра вместе с её выводом.
@@ -145,6 +151,8 @@ impl RustRim {
             duplicates: DuplicatesUi::default(),
             tags: Tags::load(),
             tags_ui: TagsUi::default(),
+            validation: ValidationUi::new(),
+            game_version: None,
             detected_prefixes: Vec::new(),
             game_run: None,
             show_launch_window: false,
@@ -279,6 +287,7 @@ impl RustRim {
         }
 
         self.db = ModDb::build(entries);
+        self.game_version = paths::game_version(std::path::Path::new(&self.settings.game_path));
         self.caches.invalidate();
     }
 
@@ -329,6 +338,13 @@ impl RustRim {
 
     fn after_profile_change(&mut self) {
         self.caches.invalidate();
+        // Диагностики считаются от состава и порядка сборки, значит устарели.
+        // Это происходит раз на действие пользователя, а не каждый кадр.
+        self.revalidate();
+    }
+
+    fn revalidate(&mut self) {
+        self.validation.refresh(&self.db, &self.profile, self.game_version.as_deref());
     }
 
     fn is_core(&self, id: &ModId) -> bool {
@@ -576,6 +592,7 @@ impl eframe::App for RustRim {
         self.show_dialogs(&ctx);
         self.show_notice(&ctx);
         self.show_launch_window(&ctx);
+        self.show_validation(&ctx);
     }
 }
 
@@ -599,6 +616,7 @@ impl RustRim {
         if resp.reload_clicked    { self.reload_mods(); }
         if resp.tags_clicked      { self.tags_ui.open = true; }
         if resp.play_clicked      { self.launch_game(); }
+        if resp.check_clicked     { self.revalidate(); self.validation.open = true; }
     }
 
     fn show_status_bar(&mut self, ui: &mut egui::Ui) {
@@ -622,6 +640,21 @@ impl RustRim {
                                 .color(theme::WARNING_AMBER)
                                 .size(11.5),
                         );
+                    }
+                    let (errors, warns) = (self.validation.errors(), self.validation.warnings());
+                    if self.validation.was_checked() && (errors > 0 || warns > 0) {
+                        ui.separator();
+                        let color = if errors > 0 { theme::ERROR_RED } else { theme::WARNING_AMBER };
+                        let label = RichText::new(format!("Проверка: ✕ {errors}  ⚠ {warns}"))
+                            .color(color)
+                            .size(11.5);
+                        if ui
+                            .add(egui::Button::new(label).frame(false))
+                            .on_hover_text("Открыть проверку сборки")
+                            .clicked()
+                        {
+                            self.validation.open = true;
+                        }
                     }
                 });
             });
@@ -938,6 +971,23 @@ impl RustRim {
         {
             self.steamcmd_panel.add_ids(&ids);
             self.windows.steamcmd = true;
+        }
+    }
+
+    fn show_validation(&mut self, ctx: &egui::Context) {
+        match validation_panel::show(ctx, &mut self.validation, &self.db) {
+            validation_panel::Reply::None => {}
+            validation_panel::Reply::Select(id) => self.selected = Some(id),
+            validation_panel::Reply::Apply(fix) => self.apply_fix(fix),
+        }
+    }
+
+    fn apply_fix(&mut self, fix: crate::validation::Fix) {
+        use crate::validation::Fix;
+        match fix {
+            Fix::Activate(id) => self.apply(Action::Activate(id)),
+            Fix::Deactivate(id) => self.apply(Action::Deactivate(id)),
+            Fix::Sort => self.sort_active_mods(),
         }
     }
 
