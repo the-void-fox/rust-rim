@@ -2,10 +2,13 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::game::LaunchSettings;
+
 #[derive(PartialEq, Default, Clone, Serialize, Deserialize)]
 pub enum SettingsTab {
     #[default]
     Paths,
+    Launch,
     Interface,
     Behavior,
 }
@@ -39,6 +42,9 @@ pub struct AppSettings {
     /// хосты, и выбор мода в списке превращался бы в сетевой запрос к ним.
     #[serde(default)]
     pub load_remote_images: bool,
+    /// Как запускать игру.
+    #[serde(default)]
+    pub launch: LaunchSettings,
     #[serde(skip)]
     pub active_tab: SettingsTab,
 }
@@ -60,6 +66,7 @@ impl Default for AppSettings {
             steamcmd_multi_threshold: 10,
             log_file_path: String::new(),
             load_remote_images: false,
+            launch: LaunchSettings::default(),
             active_tab: SettingsTab::default(),
         }
     }
@@ -75,6 +82,21 @@ impl AppSettings {
         directories::ProjectDirs::from("com", "rustrim", "RustRim")
             .map(|d| d.data_dir().join("steamcmd_data").to_string_lossy().into_owned())
             .unwrap_or_default()
+    }
+
+    /// Подставляет пути к конфигу и логу из wine-префикса.
+    ///
+    /// Иначе пользователю пришлось бы вручную вбивать путь вида
+    /// `<префикс>/drive_c/users/<кто-то>/AppData/LocalLow/Ludeon Studios/…`,
+    /// где имя пользователя внутри префикса заранее неизвестно.
+    pub fn adopt_prefix(&mut self, prefix: &crate::game::Prefix) {
+        self.launch.prefix = prefix.path.to_string_lossy().into_owned();
+        self.config_path = crate::game::paths::config_dir(&prefix.data_dir)
+            .to_string_lossy()
+            .into_owned();
+        self.log_file_path = crate::game::paths::player_log(&prefix.data_dir)
+            .to_string_lossy()
+            .into_owned();
     }
 
     /// Заданы ли пути, без которых приложению нечего показывать.

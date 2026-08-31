@@ -1,5 +1,6 @@
 use egui::{Align2, Button, Context, Frame, Margin, RichText, Stroke, Window};
 
+use crate::game::{launch, Prefix, Runner};
 use crate::settings::{AppSettings, SettingsTab};
 use crate::ui::theme;
 use crate::ui::{fit_width, fit_width_minus};
@@ -229,7 +230,12 @@ pub fn save_dialog(
 }
 
 /// Возвращает `true`, если пользователь нажал «Применить».
-pub fn settings_dialog(ctx: &Context, open: &mut bool, settings: &mut AppSettings) -> bool {
+pub fn settings_dialog(
+    ctx: &Context,
+    open: &mut bool,
+    settings: &mut AppSettings,
+    prefixes: &[Prefix],
+) -> bool {
     if !*open { return false; }
 
     let mut applied = false;
@@ -247,6 +253,7 @@ pub fn settings_dialog(ctx: &Context, open: &mut bool, settings: &mut AppSetting
             // ── Вкладки ──────────────────────────────────────────────────
             ui.horizontal(|ui| {
                 tab_button(ui, "📁  Пути",       settings.active_tab == SettingsTab::Paths,     || settings.active_tab = SettingsTab::Paths);
+                tab_button(ui, "▶  Запуск",      settings.active_tab == SettingsTab::Launch,     || settings.active_tab = SettingsTab::Launch);
                 tab_button(ui, "🎨  Интерфейс",  settings.active_tab == SettingsTab::Interface,  || settings.active_tab = SettingsTab::Interface);
                 tab_button(ui, "⚙  Поведение",   settings.active_tab == SettingsTab::Behavior,   || settings.active_tab = SettingsTab::Behavior);
             });
@@ -285,6 +292,9 @@ pub fn settings_dialog(ctx: &Context, open: &mut bool, settings: &mut AppSetting
                         &mut settings.steamcmd_path,
                         "steamcmd_path_edit");
                 }
+
+                // ── Запуск ───────────────────────────────────────────────
+                SettingsTab::Launch => launch_tab(ui, settings, prefixes),
 
                 // ── Интерфейс ────────────────────────────────────────────
                 SettingsTab::Interface => {
@@ -412,6 +422,150 @@ pub fn settings_dialog(ctx: &Context, open: &mut bool, settings: &mut AppSetting
         });
 
     applied
+}
+
+// ─── Вкладка «Запуск» ────────────────────────────────────────────────────────
+
+fn launch_tab(ui: &mut egui::Ui, settings: &mut AppSettings, prefixes: &[Prefix]) {
+    section_header(ui, "СПОСОБ ЗАПУСКА");
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(10.0);
+        egui::ComboBox::from_id_salt("runner_combo")
+            .selected_text(settings.launch.runner.label())
+            .width(220.0)
+            .show_ui(ui, |ui| {
+                for runner in [
+                    Runner::Auto, Runner::Native, Runner::Umu,
+                    Runner::Wine, Runner::Steam, Runner::Custom,
+                ] {
+                    ui.selectable_value(&mut settings.launch.runner, runner, runner.label());
+                }
+            });
+    });
+    ui.add_space(2.0);
+    hint(ui, "«Автоматически» — нативная сборка запускается напрямую, Windows-сборка через umu-run.");
+
+    if settings.launch.runner == Runner::Custom {
+        ui.add_space(8.0);
+        section_header(ui, "СВОЯ КОМАНДА");
+        ui.add_space(4.0);
+        text_row(ui, &mut settings.launch.custom_command, "custom_command",
+            "например: gamescope -f -- umu-run");
+        ui.add_space(2.0);
+        hint(ui, "Путь к игре и аргументы дописываются в конец команды.");
+    }
+
+    ui.add_space(10.0);
+    section_header(ui, "ПРЕФИКС WINE / PROTON");
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(10.0);
+        if ui.button("…").on_hover_text("Выбрать папку").clicked() {
+            if let Some(p) = pick_folder("Выберите префикс") {
+                settings.launch.prefix = p;
+            }
+        }
+        ui.add(
+            egui::TextEdit::singleline(&mut settings.launch.prefix)
+                .id(egui::Id::new("prefix_edit"))
+                .desired_width(fit_width_minus(ui, 12.0))
+                .hint_text("не задан — будет выбран найденный ниже")
+                .text_color(theme::TEXT_PRIMARY),
+        );
+    });
+
+    ui.add_space(6.0);
+    if prefixes.is_empty() {
+        hint(ui, "Префиксы с данными RimWorld не найдены.");
+    } else {
+        hint(ui, "Найденные префиксы (первым — тот, в чей конфиг писали последним):");
+        ui.add_space(2.0);
+        for prefix in prefixes {
+            ui.horizontal(|ui| {
+                ui.add_space(10.0);
+                if ui
+                    .button("Выбрать")
+                    .on_hover_text("Подставит и пути к ModsConfig.xml и Player.log")
+                    .clicked()
+                {
+                    settings.adopt_prefix(prefix);
+                }
+                ui.label(RichText::new(format!("[{}]", prefix.source))
+                    .color(theme::TEXT_ACCENT).size(10.5));
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(prefix.path.to_string_lossy())
+                            .color(theme::TEXT_MUTED).size(10.5),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(prefix.data_dir.to_string_lossy());
+            });
+        }
+    }
+
+    ui.add_space(10.0);
+    section_header(ui, "ВЕРСИЯ PROTON");
+    ui.add_space(4.0);
+    text_row(ui, &mut settings.launch.proton, "proton_edit", "GE-Proton");
+    ui.add_space(2.0);
+    hint(ui, "Имя (GE-Proton — последний установленный) или полный путь к версии.");
+
+    ui.add_space(10.0);
+    section_header(ui, "ДОПОЛНИТЕЛЬНЫЕ АРГУМЕНТЫ");
+    ui.add_space(4.0);
+    text_row(ui, &mut settings.launch.extra_args, "extra_args_edit", "-popupwindow");
+
+    ui.add_space(10.0);
+    section_header(ui, "ИТОГОВАЯ КОМАНДА");
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(10.0);
+        ui.vertical(|ui| {
+            ui.set_max_width(fit_width(ui));
+            match preview(settings, prefixes) {
+                Ok(text) => {
+                    ui.label(RichText::new(text).color(theme::TEXT_PRIMARY).size(10.5).monospace());
+                }
+                Err(e) => {
+                    ui.label(RichText::new(format!("⚠ {e}")).color(theme::WARNING_AMBER).size(11.0));
+                }
+            }
+        });
+    });
+}
+
+/// Команда, которая выполнится при нажатии «Запустить».
+fn preview(settings: &AppSettings, prefixes: &[Prefix]) -> Result<String, launch::LaunchError> {
+    let mut effective = settings.launch.clone();
+    if effective.prefix.trim().is_empty() {
+        if let Some(p) = prefixes.first() {
+            effective.prefix = p.path.to_string_lossy().into_owned();
+        }
+    }
+    let game = std::path::Path::new(&settings.game_path);
+    launch::plan(game, &effective, &launch::Mode::Play).map(|p| p.display())
+}
+
+fn hint(ui: &mut egui::Ui, text: &str) {
+    ui.horizontal(|ui| {
+        ui.add_space(10.0);
+        ui.label(RichText::new(text).color(theme::TEXT_MUTED).size(10.5).italics());
+    });
+}
+
+fn text_row(ui: &mut egui::Ui, value: &mut String, id: &str, hint_text: &str) {
+    ui.horizontal(|ui| {
+        ui.add_space(10.0);
+        ui.add(
+            egui::TextEdit::singleline(value)
+                .id(egui::Id::new(id))
+                .desired_width(fit_width_minus(ui, 12.0))
+                .hint_text(hint_text)
+                .text_color(theme::TEXT_PRIMARY),
+        );
+    });
 }
 
 // ─── Вспомогательные виджеты ─────────────────────────────────────────────────

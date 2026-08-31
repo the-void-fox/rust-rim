@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use egui::{Color32, Frame, Margin, RichText, Stroke, Vec2};
 
 use crate::fs_util;
+use crate::game::{launch, paths, Prefix};
 use crate::mod_data::{
     ModDb, ModId, ModSource, Profile,
     parse_mods_config, scan_dlc_mods, scan_local_mods, write_mod_list, write_mods_config,
@@ -102,6 +103,13 @@ pub struct RustRim {
     tags: Tags,
     tags_ui: TagsUi,
 
+    /// Найденные wine-префиксы (обновляются при открытии настроек).
+    detected_prefixes: Vec<Prefix>,
+    /// Запущенная игра — держим, чтобы не плодить зомби-процессы.
+    game_process: Option<std::process::Child>,
+    /// Короткое сообщение пользователю: (текст, это ошибка).
+    notice: Option<(String, bool)>,
+
     steamcmd_panel: SteamCmdPanel,
     workshop_browser: WorkshopBrowser,
     log_panel: LogPanel,
@@ -134,6 +142,9 @@ impl RustRim {
             duplicates: DuplicatesUi::default(),
             tags: Tags::load(),
             tags_ui: TagsUi::default(),
+            detected_prefixes: Vec::new(),
+            game_process: None,
+            notice: None,
             steamcmd_panel: SteamCmdPanel::new(),
             workshop_browser: WorkshopBrowser::new(),
             log_panel: LogPanel::new(),
@@ -175,6 +186,60 @@ impl RustRim {
         }
         self.duplicates.show_list = !self.db.duplicates().is_empty();
         tracing::info!("Rescanned: {} mods, {} active", self.db.len(), self.profile.len());
+    }
+
+    // ── Запуск игры ──────────────────────────────────────────────────────────
+
+    /// Поиск префиксов лезет в несколько папок, поэтому делается один раз
+    /// при открытии настроек, а не каждый кадр.
+    fn open_settings(&mut self) {
+        self.detected_prefixes = paths::find_prefixes();
+        self.windows.settings = true;
+    }
+
+    fn launch_game(&mut self) {
+        let mut effective = self.settings.launch.clone();
+        if effective.prefix.trim().is_empty() {
+            // Настройки могли не открывать ни разу — ищем префикс сейчас.
+            if self.detected_prefixes.is_empty() {
+                self.detected_prefixes = paths::find_prefixes();
+            }
+            if let Some(p) = self.detected_prefixes.first() {
+                effective.prefix = p.path.to_string_lossy().into_owned();
+            }
+        }
+
+        let game = std::path::Path::new(&self.settings.game_path);
+        let plan = match launch::plan(game, &effective, &launch::Mode::Play) {
+            Ok(plan) => plan,
+            Err(e) => {
+                self.notice = Some((e.to_string(), true));
+                return;
+            }
+        };
+
+        tracing::info!("Launching game: {}", plan.display());
+        match plan.to_command().spawn() {
+            Ok(child) => {
+                self.notice = Some((
+                    format!("RimWorld запущен (PID {}).\n\n{}", child.id(), plan.display()),
+                    false,
+                ));
+                self.game_process = Some(child);
+            }
+            Err(e) => {
+                self.notice = Some((format!("Не удалось запустить: {e}\n\n{}", plan.display()), true));
+            }
+        }
+    }
+
+    /// Снимает завершившийся процесс игры, чтобы он не оставался зомби.
+    fn reap_game_process(&mut self) {
+        if let Some(child) = &mut self.game_process {
+            if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
+                self.game_process = None;
+            }
+        }
     }
 
     fn clear_selection(&mut self) {
@@ -502,6 +567,8 @@ impl eframe::App for RustRim {
 
         self.show_drag_ghost(&ctx);
         self.show_dialogs(&ctx);
+        self.show_notice(&ctx);
+        self.reap_game_process();
     }
 }
 
@@ -514,7 +581,7 @@ impl RustRim {
 
         if resp.save_clicked      { self.windows.save = true; }
         if resp.sort_clicked      { self.sort_active_mods(); }
-        if resp.settings_clicked  { self.windows.settings = true; }
+        if resp.settings_clicked  { self.open_settings(); }
         if resp.activate_all      { self.activate_all(); }
         if resp.deactivate_all    { self.deactivate_all(); }
         if resp.save_list_clicked { self.export_mod_list(); }
@@ -524,6 +591,7 @@ impl RustRim {
         if resp.logs_clicked      { self.windows.logs = true; }
         if resp.reload_clicked    { self.reload_mods(); }
         if resp.tags_clicked      { self.tags_ui.open = true; }
+        if resp.play_clicked      { self.launch_game(); }
     }
 
     fn show_status_bar(&mut self, ui: &mut egui::Ui) {
@@ -796,7 +864,12 @@ impl RustRim {
         }
 
         if self.windows.settings
-            && dialogs::settings_dialog(ctx, &mut self.windows.settings, &mut self.settings)
+            && dialogs::settings_dialog(
+                ctx,
+                &mut self.windows.settings,
+                &mut self.settings,
+                &self.detected_prefixes,
+            )
         {
             self.settings.save();
             self.load_mods();
@@ -858,6 +931,31 @@ impl RustRim {
         {
             self.steamcmd_panel.add_ids(&ids);
             self.windows.steamcmd = true;
+        }
+    }
+
+    /// Короткое сообщение о результате действия (например, запуска игры).
+    fn show_notice(&mut self, ctx: &egui::Context) {
+        let Some((text, is_error)) = self.notice.clone() else { return };
+        let title = if is_error { "Ошибка" } else { "Готово" };
+        let color = if is_error { theme::ERROR_RED } else { theme::ACTIVE_GREEN };
+        let mut open = true;
+
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .max_width(560.0)
+            .show(ctx, |ui| {
+                ui.label(RichText::new(&text).color(color).size(11.5));
+                ui.add_space(8.0);
+                if ui.button("OK").clicked() {
+                    self.notice = None;
+                }
+            });
+        if !open {
+            self.notice = None;
         }
     }
 

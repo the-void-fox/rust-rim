@@ -4,6 +4,7 @@
 pub mod app;
 pub mod description;
 pub mod fs_util;
+pub mod game;
 pub mod job;
 pub mod log_analysis;
 pub mod mod_data;

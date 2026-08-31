@@ -5,6 +5,7 @@ use crate::ui::theme;
 /// Результат взаимодействия с панелью инструментов.
 #[derive(Default)]
 pub struct ToolbarResponse {
+    pub play_clicked: bool,
     pub save_clicked: bool,
     pub reload_clicked: bool,
     pub sort_clicked: bool,
@@ -21,6 +22,7 @@ pub struct ToolbarResponse {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Btn {
+    Play,
     Save,
     Reload,
     Sort,
@@ -46,6 +48,9 @@ struct Spec {
 /// Кнопки в порядке убывания важности: при нехватке ширины хвост списка
 /// первым уезжает в меню «⋯».
 const SPECS: &[Spec] = &[
+    Spec { btn: Btn::Play, icon: "▶", label: "Запустить",
+        tip: "Запустить RimWorld с текущей сборкой модов",
+        color: || theme::ACTIVE_GREEN, accent: || theme::ACTIVE_GREEN },
     Spec { btn: Btn::Save, icon: "💾", label: "Сохранить",
         tip: "Сохранить ModsConfig.xml",
         color: || theme::TEXT_PRIMARY, accent: || theme::BORDER },
@@ -212,6 +217,7 @@ fn styled(spec: &Spec, text: &str) -> Button<'static> {
 
 fn mark(resp: &mut ToolbarResponse, btn: Btn) {
     match btn {
+        Btn::Play          => resp.play_clicked = true,
         Btn::Save          => resp.save_clicked = true,
         Btn::Reload        => resp.reload_clicked = true,
         Btn::Sort          => resp.sort_clicked = true,
