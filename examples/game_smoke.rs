@@ -7,6 +7,7 @@
 // рабочая, а не только красиво выглядит.
 
 use rust_rim::game::{launch, paths};
+use rust_rim::process::Run;
 
 fn main() {
     let dir = std::env::args().nth(1).expect("usage: game_smoke <game_dir>");
@@ -74,36 +75,33 @@ fn launch_and_wait(game: &std::path::Path, settings: &launch::LaunchSettings, se
     };
 
     println!("\nЗапускаю на {secs} с…");
-    let mut child = match plan.to_command().spawn() {
-        Ok(c) => c,
+    let mut run = match Run::spawn(plan.to_command(), plan.display()) {
+        Ok(r) => r,
         Err(e) => {
             println!("Не удалось запустить: {e}");
             return;
         }
     };
-    println!("PID {}", child.id());
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                println!("Процесс завершился сам: {status}");
-                return;
-            }
-            Ok(None) => {}
-            Err(e) => {
-                println!("Ошибка ожидания: {e}");
-                return;
-            }
-        }
-        if std::time::Instant::now() >= deadline {
+    while std::time::Instant::now() < deadline {
+        if run.poll() {
+            println!("Процесс завершился сам: {:?}", run.status());
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        std::thread::sleep(std::time::Duration::from_millis(200));
     }
 
-    println!("Время вышло — снимаю процесс");
-    let _ = child.kill();
-    let _ = child.wait();
-    println!("Готово: игра запустилась и была снята штатно");
+    let running = run.is_running();
+    if running {
+        println!("Время вышло — снимаю процесс");
+        run.kill();
+    }
+
+    let lines = run.lines();
+    println!("\nПерехвачено строк вывода: {} (в буфере {})", run.total_lines(), lines.len());
+    println!("Последние 12 строк — это то, что показывает окно запуска:");
+    for line in lines.iter().rev().take(12).rev() {
+        println!("  | {line}");
+    }
 }

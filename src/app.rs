@@ -10,6 +10,7 @@ use egui::{Color32, Frame, Margin, RichText, Stroke, Vec2};
 
 use crate::fs_util;
 use crate::game::{launch, paths, Prefix};
+use crate::process::Run;
 use crate::mod_data::{
     ModDb, ModId, ModSource, Profile,
     parse_mods_config, scan_dlc_mods, scan_local_mods, write_mod_list, write_mods_config,
@@ -22,6 +23,7 @@ use crate::ui::details::DetailsView;
 use crate::ui::duplicates::DuplicatesUi;
 use crate::ui::list_cache::{ListCaches, SearchState};
 use crate::ui::tags_panel::TagsUi;
+use crate::ui::launch_panel;
 use crate::ui::log_panel::LogPanel;
 use crate::ui::mod_list::ModList;
 use crate::ui::preview::Preview;
@@ -105,8 +107,9 @@ pub struct RustRim {
 
     /// Найденные wine-префиксы (обновляются при открытии настроек).
     detected_prefixes: Vec<Prefix>,
-    /// Запущенная игра — держим, чтобы не плодить зомби-процессы.
-    game_process: Option<std::process::Child>,
+    /// Запущенная игра вместе с её выводом.
+    game_run: Option<Run>,
+    show_launch_window: bool,
     /// Короткое сообщение пользователю: (текст, это ошибка).
     notice: Option<(String, bool)>,
 
@@ -143,7 +146,8 @@ impl RustRim {
             tags: Tags::load(),
             tags_ui: TagsUi::default(),
             detected_prefixes: Vec::new(),
-            game_process: None,
+            game_run: None,
+            show_launch_window: false,
             notice: None,
             steamcmd_panel: SteamCmdPanel::new(),
             workshop_browser: WorkshopBrowser::new(),
@@ -219,26 +223,29 @@ impl RustRim {
         };
 
         tracing::info!("Launching game: {}", plan.display());
-        match plan.to_command().spawn() {
-            Ok(child) => {
-                self.notice = Some((
-                    format!("RimWorld запущен (PID {}).\n\n{}", child.id(), plan.display()),
-                    false,
-                ));
-                self.game_process = Some(child);
+        let command = plan.display();
+        match Run::spawn(plan.to_command(), command.clone()) {
+            Ok(run) => {
+                self.game_run = Some(run);
+                self.show_launch_window = true;
             }
             Err(e) => {
-                self.notice = Some((format!("Не удалось запустить: {e}\n\n{}", plan.display()), true));
+                self.notice = Some((format!("Не удалось запустить: {e}\n\n{command}"), true));
             }
         }
     }
 
-    /// Снимает завершившийся процесс игры, чтобы он не оставался зомби.
-    fn reap_game_process(&mut self) {
-        if let Some(child) = &mut self.game_process {
-            if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
-                self.game_process = None;
-            }
+    /// Живой вывод запуска: без него Proton молчит десятки секунд, и
+    /// непонятно, запускается игра или нет.
+    fn show_launch_window(&mut self, ctx: &egui::Context) {
+        let Some(run) = &mut self.game_run else { return };
+        let finished_now = run.poll();
+        if run.is_running() || finished_now {
+            // Пока идёт вывод, окно обновляется само.
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
+        if launch_panel::show(ctx, &mut self.show_launch_window, run) == launch_panel::Reply::Kill {
+            run.kill();
         }
     }
 
@@ -568,7 +575,7 @@ impl eframe::App for RustRim {
         self.show_drag_ghost(&ctx);
         self.show_dialogs(&ctx);
         self.show_notice(&ctx);
-        self.reap_game_process();
+        self.show_launch_window(&ctx);
     }
 }
 

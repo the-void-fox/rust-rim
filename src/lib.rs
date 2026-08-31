@@ -8,6 +8,7 @@ pub mod game;
 pub mod job;
 pub mod log_analysis;
 pub mod mod_data;
+pub mod process;
 pub mod settings;
 pub mod sorting;
 pub mod tags;
