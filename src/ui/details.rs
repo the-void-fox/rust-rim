@@ -4,6 +4,7 @@ use egui::{Align2, Color32, FontId, RichText, Sense, Stroke, StrokeKind, Vec2};
 
 use crate::mod_data::{ModEntry, ModSource};
 use crate::ui::theme;
+use crate::ui::fit_width;
 
 pub fn source_color(source: &ModSource) -> Color32 {
     match source {
@@ -41,7 +42,7 @@ pub fn show_mod_details(
     egui::ScrollArea::vertical()
         .id_salt("details_scroll")
         .show(ui, |ui| {
-            ui.set_width(ui.available_width());
+            ui.set_width(fit_width(ui));
 
             show_banner(ui, m, preview_tex);
             ui.add_space(10.0);
@@ -112,7 +113,7 @@ pub fn show_mod_details(
 }
 
 fn show_banner(ui: &mut egui::Ui, m: &ModEntry, preview_tex: Option<&egui::TextureHandle>) {
-    let img_w = ui.available_width();
+    let img_w = fit_width(ui);
     let img_h = 160.0_f32.min(img_w * 0.5625); // 16:9
     let (img_rect, _) = ui.allocate_exact_size(Vec2::new(img_w, img_h), Sense::hover());
 

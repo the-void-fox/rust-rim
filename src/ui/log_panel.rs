@@ -7,6 +7,7 @@ use crate::job::Job;
 use crate::log_analysis::{analyze, LogIssue, ModIndex, Severity};
 use crate::mod_data::{ModDb, ModEntry, ModId, Profile};
 use crate::ui::theme;
+use crate::ui::fit_width;
 
 /// Логи больше этого размера читаются с хвоста (старое обрезается).
 const MAX_LOG_BYTES: usize = 32 * 1024 * 1024;
@@ -247,7 +248,7 @@ fn draw_issue(
         .stroke(Stroke::new(1.0, theme::BORDER))
         .inner_margin(Margin::symmetric(8, 6))
         .show(ui, |ui| {
-            ui.set_width(ui.available_width());
+            ui.set_width(fit_width(ui));
 
             ui.horizontal(|ui| {
                 ui.label(RichText::new(mark).color(mark_color).size(12.0));
@@ -317,7 +318,7 @@ fn draw_issue(
                     .fill(theme::BG_DARK)
                     .inner_margin(Margin::symmetric(6, 5))
                     .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
+                        ui.set_width(fit_width(ui));
                         egui::ScrollArea::vertical()
                             .id_salt(("issue_text", idx))
                             .max_height(240.0)

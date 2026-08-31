@@ -4,6 +4,26 @@ use egui::{Align, Color32, Frame, Layout, Margin, RichText, Sense, Vec2};
 
 use crate::ui::theme;
 
+/// Доступная ширина, никогда не отрицательная.
+///
+/// `Ui::available_width()` уходит в минус, когда контейнер уже переполнен —
+/// это норма при узком окне или длинной строке. Но `set_width` и
+/// `allocate_exact_size` на отрицательном значении роняют egui через
+/// `debug_assert` («Negative width makes no sense»), поэтому любой расчёт
+/// ширины обязан проходить здесь.
+///
+/// Отдельного «минимального размера окна» для этого недостаточно: тайловые
+/// композиторы (niri, sway) игнорируют `min_inner_size`, и окно всё равно
+/// можно сжать до любой ширины.
+pub fn fit_width(ui: &egui::Ui) -> f32 {
+    ui.available_width().max(0.0)
+}
+
+/// [`fit_width`] с вычетом места, зарезервированного под соседний элемент.
+pub fn fit_width_minus(ui: &egui::Ui, reserve: f32) -> f32 {
+    (ui.available_width() - reserve).max(0.0)
+}
+
 /// Заголовок колонки со счётчиком модов.
 pub fn panel_header(ui: &mut egui::Ui, title: &str, accent: Color32, is_active: bool, count: usize) {
     Frame::NONE

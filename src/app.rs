@@ -47,6 +47,19 @@ pub enum Action {
     OpenFolder(ModId),
 }
 
+/// Минимальная осмысленная ширина колонки со списком модов: иконка источника,
+/// обрезанное название, версия и значок предупреждения.
+const MIN_LIST_WIDTH: f32 = 160.0;
+
+/// Помещаются ли два списка рядом.
+///
+/// `Ui::columns` делит доступную ширину на число колонок и роняет egui через
+/// `debug_assert`, если доля колонки отрицательна. Условие ниже гарантирует
+/// долю не меньше [`MIN_LIST_WIDTH`], то есть заведомо положительную.
+pub fn fits_two_columns(available: f32, spacing: f32) -> bool {
+    available >= 2.0 * MIN_LIST_WIDTH + spacing
+}
+
 // ─── Открытые окна ───────────────────────────────────────────────────────────
 #[derive(Default)]
 struct Windows {
@@ -538,7 +551,7 @@ impl RustRim {
                     .fill(theme::BG_HEADER)
                     .inner_margin(Margin::symmetric(10, 7))
                     .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
+                        ui.set_width(widgets::fit_width(ui));
                         ui.label(
                             RichText::new("ИНФОРМАЦИЯ О МОДЕ")
                                 .color(theme::TEXT_MUTED)
@@ -561,6 +574,19 @@ impl RustRim {
         egui::CentralPanel::default()
             .frame(Frame::NONE.fill(theme::BG_DARK))
             .show(ui, |ui| {
+                let spacing = ui.spacing().item_spacing.x;
+
+                // `Ui::columns` делит доступную ширину на число колонок и
+                // роняет egui, если результат отрицательный. Поэтому две
+                // колонки рисуем только когда они реально помещаются, иначе
+                // остаётся один список — порядок загрузки важнее каталога.
+                if !fits_two_columns(widgets::fit_width(ui), spacing) {
+                    if let Some(req) = self.list_column(ui, true, active_count) {
+                        action = Some(req);
+                    }
+                    return;
+                }
+
                 ui.columns(2, |cols| {
                     if let Some(req) = self.list_column(&mut cols[0], false, inactive_count) {
                         action = Some(req);

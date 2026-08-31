@@ -5,6 +5,7 @@ use egui::{Frame, Margin, RichText, Stroke, Vec2};
 
 use crate::ui::theme;
 use crate::steam::workshop_api::{self, CollectionItem, SortOrder, WorkshopItem};
+use crate::ui::{fit_width, fit_width_minus};
 
 // ─── Tab ─────────────────────────────────────────────────────────────────────
 
@@ -401,7 +402,7 @@ impl WorkshopBrowser {
             .id_salt("wsbrowser_results")
             .max_height(results_h)
             .show(ui, |ui| {
-                ui.set_width(ui.available_width());
+                ui.set_width(fit_width(ui));
 
                 if is_idle || is_loading {
                     if is_idle {
@@ -440,7 +441,7 @@ impl WorkshopBrowser {
                     self.images.request(&item.preview_url);
                 }
 
-                let w = ui.available_width();
+                let w = fit_width(ui);
                 for item in &items {
                     let in_queue   = self.queue.iter().any(|(id, _)| *id == item.id);
                     let is_installed = installed_ids.contains(&item.id);
@@ -451,7 +452,7 @@ impl WorkshopBrowser {
                         .fill(row_bg)
                         .inner_margin(Margin::symmetric(8, 5))
                         .show(ui, |ui| {
-                            ui.set_width(w - 16.0);
+                            ui.set_width((w - 16.0).max(0.0));
                             ui.horizontal(|ui| {
                                 // Превью
                                 let img_size = Vec2::new(144.0, 144.0);
@@ -464,7 +465,7 @@ impl WorkshopBrowser {
 
                                 // Инфо
                                 ui.vertical(|ui| {
-                                    ui.set_width(ui.available_width() - 110.0);
+                                    ui.set_width(fit_width_minus(ui, 110.0));
                                     ui.label(RichText::new(&item.title).color(theme::TEXT_PRIMARY).size(12.5).strong());
                                     ui.label(
                                         RichText::new(format!("by {}  •  ID: {}", item.author, item.id))
@@ -667,7 +668,7 @@ impl WorkshopBrowser {
             .id_salt("wsbrowser_coll_results")
             .max_height(results_h)
             .show(ui, |ui| {
-                ui.set_width(ui.available_width());
+                ui.set_width(fit_width(ui));
 
                 if is_idle || is_loading {
                     if is_idle {
@@ -706,7 +707,7 @@ impl WorkshopBrowser {
                     self.coll_images.request(&item.preview_url);
                 }
 
-                let w = ui.available_width();
+                let w = fit_width(ui);
                 let dl_busy = self.coll_dl_for.is_some();
 
                 for item in &items {
@@ -716,7 +717,7 @@ impl WorkshopBrowser {
                         .fill(theme::BG_ROW_EVEN)
                         .inner_margin(Margin::symmetric(8, 5))
                         .show(ui, |ui| {
-                            ui.set_width(w - 16.0);
+                            ui.set_width((w - 16.0).max(0.0));
                             ui.horizontal(|ui| {
                                 // Превью
                                 let img_size = Vec2::new(144.0, 144.0);
@@ -729,7 +730,7 @@ impl WorkshopBrowser {
 
                                 // Инфо
                                 ui.vertical(|ui| {
-                                    ui.set_width(ui.available_width() - 160.0);
+                                    ui.set_width(fit_width_minus(ui, 160.0));
                                     ui.label(RichText::new(&item.title).color(theme::TEXT_PRIMARY).size(12.5).strong());
                                     ui.label(
                                         RichText::new(format!("by {}  •  ID: {}", item.author, item.id))
@@ -801,7 +802,7 @@ impl WorkshopBrowser {
                         egui::ScrollArea::horizontal()
                             .id_salt("wsbrowser_coll_queue_tags")
                             .max_height(26.0)
-                            .max_width(ui.available_width() * 0.7)
+                            .max_width(fit_width(ui) * 0.7)
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     let snap = self.queue.clone();

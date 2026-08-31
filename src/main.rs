@@ -14,6 +14,10 @@ fn main() -> eframe::Result<()> {
         include_bytes!("assets/icon.png")
     ).ok();
 
+    // min_inner_size — только пожелание композитору: тайловые WM (niri, sway)
+    // его игнорируют и сжимают окно как захотят. Поэтому раскладка обязана
+    // переживать любую ширину сама — см. ui::widgets::fit_width и
+    // app::fits_two_columns, плюс регрессию tests/narrow_layout.rs.
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("RustRim")
         .with_min_inner_size([900.0, 600.0])

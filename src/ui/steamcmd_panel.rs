@@ -3,6 +3,7 @@ use std::sync::mpsc;
 
 use crate::ui::theme;
 use crate::steam::steamcmd;
+use crate::ui::fit_width;
 
 const LOG_MAX: usize = 300;
 
@@ -440,7 +441,7 @@ impl SteamCmdPanel {
             .max_height(avail_h)
             .stick_to_bottom(true)
             .show(ui, |ui| {
-                ui.set_width(ui.available_width());
+                ui.set_width(fit_width(ui));
                 Frame::NONE
                     .fill(theme::BG_DARK)
                     .inner_margin(Margin::same(6))

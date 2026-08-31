@@ -2,6 +2,7 @@ use egui::{Align2, Button, Context, Frame, Margin, RichText, Stroke, Window};
 
 use crate::settings::{AppSettings, SettingsTab};
 use crate::ui::theme;
+use crate::ui::{fit_width, fit_width_minus};
 
 /// Открывает нативный диалог выбора папки и возвращает путь как строку.
 fn pick_folder(title: &str) -> Option<String> {
@@ -442,7 +443,7 @@ fn path_row_required(ui: &mut egui::Ui, label: &str, hint: &str, value: &mut Str
         ui.add(
             egui::TextEdit::singleline(value)
                 .id(egui::Id::new(id))
-                .desired_width(ui.available_width())
+                .desired_width(fit_width(ui))
                 .text_color(theme::TEXT_PRIMARY)
                 .hint_text("Не задан"),
         );
@@ -481,7 +482,7 @@ fn path_edit(ui: &mut egui::Ui, value: &mut String, hint: &str, id: &str) -> egu
     ui.add(
         egui::TextEdit::singleline(value)
             .id(egui::Id::new(id))
-            .desired_width(ui.available_width() - 36.0)
+            .desired_width(fit_width_minus(ui, 36.0))
             .text_color(theme::TEXT_PRIMARY)
             .hint_text(hint),
     )

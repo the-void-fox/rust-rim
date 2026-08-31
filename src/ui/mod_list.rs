@@ -72,7 +72,7 @@ impl<'a> ModList<'a> {
                 // (нулевые rect'ы строк, обрезка имён, смещение колонок).
                 let x0 = ui.max_rect().left();
                 let content_top = ui.max_rect().top();
-                let width = ui.available_width();
+                let width = crate::ui::fit_width(ui);
 
                 let total_h = num_rows as f32 * pitch;
                 ui.set_height(total_h.max(viewport.height()));
@@ -335,7 +335,7 @@ impl<'a> ModList<'a> {
 
 /// Шапка колонок над списком.
 fn draw_header(ui: &mut Ui) {
-    let width = ui.available_width();
+    let width = crate::ui::fit_width(ui);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 20.0), Sense::hover());
     let painter = ui.painter();
     painter.text(

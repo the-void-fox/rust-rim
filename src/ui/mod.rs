@@ -10,3 +10,5 @@ pub mod theme;
 pub mod toolbar;
 pub mod widgets;
 pub mod workshop_browser;
+
+pub use widgets::{fit_width, fit_width_minus};
