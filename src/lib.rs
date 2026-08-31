@@ -9,5 +9,6 @@ pub mod log_analysis;
 pub mod mod_data;
 pub mod settings;
 pub mod sorting;
+pub mod tags;
 pub mod steam;
 pub mod ui;

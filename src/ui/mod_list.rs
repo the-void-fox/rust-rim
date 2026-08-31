@@ -8,11 +8,14 @@ use egui::{
 use crate::app::{Action, DragPayload};
 use crate::ui::list_cache::RowWarn;
 use crate::mod_data::{ModDb, ModId, ModSource};
+use crate::tags::Tags;
 use crate::ui::details::{source_color, source_label};
 use crate::ui::theme;
 
 pub const ROW_HEIGHT: f32 = 22.0;
 
+/// Полоска цвета тега у левого края строки.
+const COL_TAG:     f32 = 4.0;
 const COL_ICON:    f32 = 18.0;
 const COL_VERSION: f32 = 60.0;
 const COL_WARN:    f32 = 20.0;
@@ -31,6 +34,7 @@ pub struct ModList<'a> {
     db:        &'a ModDb,
     ids:       &'a [ModId],
     warn:      &'a HashMap<ModId, RowWarn>,
+    tags:      &'a Tags,
     selected:  &'a mut Option<ModId>,
     is_active: bool,
 }
@@ -40,10 +44,11 @@ impl<'a> ModList<'a> {
         db:        &'a ModDb,
         ids:       &'a [ModId],
         warn:      &'a HashMap<ModId, RowWarn>,
+        tags:      &'a Tags,
         selected:  &'a mut Option<ModId>,
         is_active: bool,
     ) -> Self {
-        Self { db, ids, warn, selected, is_active }
+        Self { db, ids, warn, tags, selected, is_active }
     }
 
     pub fn show(self, ui: &mut Ui) -> Option<Action> {
@@ -152,7 +157,15 @@ impl<'a> ModList<'a> {
                     let painter = ui.painter();
                     painter.rect_filled(rect, 0.0, row_bg);
 
-                    if is_selected && !is_being_dragged {
+                    // Левый край строки: цвет тега, а если тегов нет —
+                    // индикатор выделения. Так видно и то, и другое.
+                    let stripe = self.tags.stripe_color(id);
+                    if let Some([r, g, b]) = stripe {
+                        painter.rect_filled(
+                            Rect::from_min_size(rect.left_top(), Vec2::new(COL_TAG, ROW_HEIGHT)),
+                            0.0, Color32::from_rgb(r, g, b),
+                        );
+                    } else if is_selected && !is_being_dragged {
                         painter.rect_filled(
                             Rect::from_min_size(rect.left_top(), Vec2::new(2.0, ROW_HEIGHT)),
                             0.0, accent,
@@ -161,7 +174,8 @@ impl<'a> ModList<'a> {
 
                     // ── Колонки ──────────────────────────────────────────
                     let icon_rect = Rect::from_min_size(
-                        rect.left_top(), Vec2::new(COL_ICON, ROW_HEIGHT));
+                        rect.left_top() + Vec2::new(COL_TAG, 0.0),
+                        Vec2::new(COL_ICON, ROW_HEIGHT));
                     let warn_rect = Rect::from_min_size(
                         Pos2::new(rect.right() - COL_WARN, rect.top()),
                         Vec2::new(COL_WARN, ROW_HEIGHT));
@@ -301,6 +315,31 @@ impl<'a> ModList<'a> {
                             ui.close();
                         }
                         ui.separator();
+                        ui.menu_button("🏷  Теги", |ui| {
+                            ui.set_min_width(180.0);
+                            if self.tags.is_empty() {
+                                ui.label(RichText::new("тегов пока нет")
+                                    .color(theme::TEXT_MUTED).size(11.0).italics());
+                            }
+                            for tag_id in self.tags.ids() {
+                                let Some(tag) = self.tags.get(tag_id) else { continue };
+                                let [r, g, b] = tag.color;
+                                let mut on = self.tags.has(id, tag_id);
+                                let label = RichText::new(&tag.name)
+                                    .color(Color32::from_rgb(r, g, b)).size(11.5);
+                                if ui.checkbox(&mut on, label).changed() {
+                                    action = Some(Action::ToggleTag {
+                                        id: id.clone(), tag: tag_id,
+                                    });
+                                }
+                            }
+                            ui.separator();
+                            if ui.button("⚙  Управление тегами…").clicked() {
+                                action = Some(Action::OpenTagEditor);
+                                ui.close();
+                            }
+                        });
+                        ui.separator();
                         if ui.button("📁  Открыть папку").clicked() {
                             action = Some(Action::OpenFolder(id.clone()));
                             ui.close();
@@ -339,7 +378,7 @@ fn draw_header(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 20.0), Sense::hover());
     let painter = ui.painter();
     painter.text(
-        Pos2::new(rect.left() + COL_ICON + 4.0, rect.center().y),
+        Pos2::new(rect.left() + COL_TAG + COL_ICON + 4.0, rect.center().y),
         Align2::LEFT_CENTER,
         "НАЗВАНИЕ", FontId::proportional(10.0), theme::TEXT_MUTED,
     );

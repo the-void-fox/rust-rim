@@ -16,15 +16,17 @@ use crate::mod_data::{
 use crate::settings::AppSettings;
 use crate::sorting::CommunityRules;
 use crate::steam::steamcmd;
+use crate::tags::{TagId, Tags};
 use crate::ui::details::DetailsView;
 use crate::ui::duplicates::DuplicatesUi;
 use crate::ui::list_cache::{ListCaches, SearchState};
+use crate::ui::tags_panel::TagsUi;
 use crate::ui::log_panel::LogPanel;
 use crate::ui::mod_list::ModList;
 use crate::ui::preview::Preview;
 use crate::ui::steamcmd_panel::SteamCmdPanel;
 use crate::ui::workshop_browser::WorkshopBrowser;
-use crate::ui::{dialogs, duplicates, theme, toolbar, widgets};
+use crate::ui::{dialogs, duplicates, tags_panel, theme, toolbar, widgets};
 
 // ─── Payload для Drag & Drop ─────────────────────────────────────────────────
 #[derive(Clone, Debug)]
@@ -46,6 +48,9 @@ pub enum Action {
     /// `to_pos` — строка в *отображаемом* (отфильтрованном) списке.
     DragDrop { id: ModId, to_active: bool, to_pos: usize },
     OpenFolder(ModId),
+    /// Повесить или снять тег.
+    ToggleTag { id: ModId, tag: TagId },
+    OpenTagEditor,
 }
 
 /// Минимальная осмысленная ширина колонки со списком модов: иконка источника,
@@ -93,6 +98,10 @@ pub struct RustRim {
     /// Состояние диалогов дубликатов.
     duplicates: DuplicatesUi,
 
+    /// Пользовательские теги модов и окно управления ими.
+    tags: Tags,
+    tags_ui: TagsUi,
+
     steamcmd_panel: SteamCmdPanel,
     workshop_browser: WorkshopBrowser,
     log_panel: LogPanel,
@@ -123,6 +132,8 @@ impl RustRim {
             preview: Preview::new(),
             community_rules: None,
             duplicates: DuplicatesUi::default(),
+            tags: Tags::load(),
+            tags_ui: TagsUi::default(),
             steamcmd_panel: SteamCmdPanel::new(),
             workshop_browser: WorkshopBrowser::new(),
             log_panel: LogPanel::new(),
@@ -292,6 +303,17 @@ impl RustRim {
                     fs_util::open_in_file_manager(&m.path);
                 }
                 return; // состояние сборки не изменилось
+            }
+            Action::ToggleTag { id, tag } => {
+                self.tags.toggle(&id, tag);
+                self.tags.save();
+                // Теги входят в ключ поиска и красят строку — кэш устарел.
+                self.caches.invalidate();
+                return;
+            }
+            Action::OpenTagEditor => {
+                self.tags_ui.open = true;
+                return;
             }
         }
         self.after_profile_change();
@@ -465,7 +487,7 @@ impl eframe::App for RustRim {
         self.show_status_bar(ui);
 
         // Индексы списков из кэша (пересчёт только при изменениях)
-        self.caches.refresh(&self.db, &self.profile, &self.search);
+        self.caches.refresh(&self.db, &self.profile, &self.tags, &self.search);
 
         let mut action = self.handle_keyboard_nav(&ctx);
 
@@ -501,6 +523,7 @@ impl RustRim {
         if resp.workshop_clicked  { self.windows.workshop = true; }
         if resp.logs_clicked      { self.windows.logs = true; }
         if resp.reload_clicked    { self.reload_mods(); }
+        if resp.tags_clicked      { self.tags_ui.open = true; }
     }
 
     fn show_status_bar(&mut self, ui: &mut egui::Ui) {
@@ -624,7 +647,8 @@ impl RustRim {
                 widgets::search_bar(ui, query, search_id);
                 ui.add_space(2.0);
                 action = ModList::new(
-                    &self.db, ids, &self.caches.warn, &mut self.selected, is_active,
+                    &self.db, ids, &self.caches.warn, &self.tags,
+                    &mut self.selected, is_active,
                 )
                 .show(ui);
             });
@@ -773,6 +797,11 @@ impl RustRim {
         {
             self.settings.save();
             self.load_mods();
+        }
+
+        if tags_panel::show(ctx, &mut self.tags_ui, &mut self.tags) {
+            self.tags.save();
+            self.caches.invalidate();
         }
 
         self.show_steamcmd_panel(ctx);

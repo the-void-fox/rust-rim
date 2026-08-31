@@ -6,6 +6,7 @@ pub mod log_panel;
 pub mod mod_list;
 pub mod preview;
 pub mod steamcmd_panel;
+pub mod tags_panel;
 pub mod theme;
 pub mod toolbar;
 pub mod widgets;

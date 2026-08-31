@@ -11,6 +11,7 @@
 
 use rust_rim::app::fits_two_columns;
 use rust_rim::mod_data::{ModDb, ModEntry, ModId, ModSource, Profile};
+use rust_rim::tags::Tags;
 use rust_rim::ui::list_cache::{ListCaches, SearchState};
 use rust_rim::ui::mod_list::ModList;
 use rust_rim::ui::details::DetailsView;
@@ -40,6 +41,7 @@ struct Fixture {
     ctx: egui::Context,
     db: ModDb,
     profile: Profile,
+    tags: Tags,
     caches: ListCaches,
     search: SearchState,
     selected: Option<ModId>,
@@ -57,6 +59,7 @@ impl Fixture {
             ctx: egui::Context::default(),
             db,
             profile,
+            tags: Tags::new(),
             caches: ListCaches::default(),
             search: SearchState::default(),
             selected: Some(ModId::new("author0.mod0")),
@@ -73,13 +76,14 @@ impl Fixture {
 
         let db = &self.db;
         let profile = &self.profile;
+        let tags = &self.tags;
         let caches = &mut self.caches;
         let search = &mut self.search;
         let selected = &mut self.selected;
         let details = &mut self.details;
 
         let _ = self.ctx.run_ui(input, |root| {
-            caches.refresh(db, profile, search);
+            caches.refresh(db, profile, tags, search);
 
             egui::Panel::top("toolbar_panel")
                 .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(8, 6)))
@@ -110,19 +114,19 @@ impl Fixture {
                 if !fits_two_columns(widgets::fit_width(ui), spacing) {
                     widgets::panel_header(ui, "АКТИВНЫЕ МОДЫ", theme::HEADER_RIGHT, true, 20);
                     widgets::search_bar(ui, &mut search.active_query, "active_search");
-                    ModList::new(db, &caches.active, &caches.warn, selected, true).show(ui);
+                    ModList::new(db, &caches.active, &caches.warn, tags, selected, true).show(ui);
                     return;
                 }
 
                 ui.columns(2, |cols| {
                     widgets::panel_header(&mut cols[0], "НЕАКТИВНЫЕ МОДЫ", theme::HEADER_LEFT, false, 20);
                     widgets::search_bar(&mut cols[0], &mut search.inactive_query, "inactive_search");
-                    ModList::new(db, &caches.inactive, &caches.warn, selected, false)
+                    ModList::new(db, &caches.inactive, &caches.warn, tags, selected, false)
                         .show(&mut cols[0]);
 
                     widgets::panel_header(&mut cols[1], "АКТИВНЫЕ МОДЫ", theme::HEADER_RIGHT, true, 20);
                     widgets::search_bar(&mut cols[1], &mut search.active_query, "active_search");
-                    ModList::new(db, &caches.active, &caches.warn, selected, true)
+                    ModList::new(db, &caches.active, &caches.warn, tags, selected, true)
                         .show(&mut cols[1]);
                 });
             });

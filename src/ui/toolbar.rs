@@ -16,6 +16,7 @@ pub struct ToolbarResponse {
     pub steamcmd_clicked: bool,
     pub workshop_clicked: bool,
     pub logs_clicked: bool,
+    pub tags_clicked: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -26,6 +27,7 @@ enum Btn {
     Workshop,
     SteamCmd,
     Logs,
+    Tags,
     SaveList,
     LoadList,
     ActivateAll,
@@ -62,6 +64,9 @@ const SPECS: &[Spec] = &[
     Spec { btn: Btn::Logs, icon: "📜", label: "Логи",
         tip: "Анализ Player.log: ошибки и предполагаемые моды-виновники",
         color: || theme::WARNING_AMBER, accent: || theme::WARNING_AMBER },
+    Spec { btn: Btn::Tags, icon: "🏷", label: "Теги",
+        tip: "Управление тегами модов. Фильтр в поиске: tag:имя",
+        color: || theme::TEXT_ACCENT, accent: || theme::BORDER_ACCENT },
     Spec { btn: Btn::SaveList, icon: "📋", label: "Сохранить список",
         tip: "Экспортировать список активных модов в файл (совместимо с RimSort)",
         color: || theme::TEXT_ACCENT, accent: || theme::BORDER_ACCENT },
@@ -213,6 +218,7 @@ fn mark(resp: &mut ToolbarResponse, btn: Btn) {
         Btn::Workshop      => resp.workshop_clicked = true,
         Btn::SteamCmd      => resp.steamcmd_clicked = true,
         Btn::Logs          => resp.logs_clicked = true,
+        Btn::Tags          => resp.tags_clicked = true,
         Btn::SaveList      => resp.save_list_clicked = true,
         Btn::LoadList      => resp.load_list_clicked = true,
         Btn::ActivateAll   => resp.activate_all = true,

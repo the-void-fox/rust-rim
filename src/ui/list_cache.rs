@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use crate::mod_data::{ModDb, ModId, Profile};
+use crate::tags::Tags;
 
 #[derive(Default)]
 pub struct SearchState {
@@ -56,7 +57,7 @@ impl ListCaches {
         self.warn.get(id).copied().unwrap_or_default()
     }
 
-    pub fn refresh(&mut self, db: &ModDb, profile: &Profile, search: &SearchState) {
+    pub fn refresh(&mut self, db: &ModDb, profile: &Profile, tags: &Tags, search: &SearchState) {
         let changed = self.dirty;
         if changed {
             self.dirty = false;
@@ -67,6 +68,13 @@ impl ListCaches {
                 let mut key = m.name.to_lowercase();
                 key.push('\n');
                 key.push_str(m.package_id.as_str());
+                // Теги попадают в тот же ключ как «tag:имя» — благодаря этому
+                // запрос «tag:фреймворк» фильтрует обычным поиском подстроки,
+                // без отдельной ветки разбора запроса.
+                for (_, tag) in tags.tags_of(&m.package_id) {
+                    key.push_str("\ntag:");
+                    key.push_str(&tag.name.to_lowercase());
+                }
                 self.keys.insert(m.package_id.clone(), key);
 
                 let is_active = profile.is_active(&m.package_id);
@@ -108,5 +116,97 @@ impl ListCaches {
 
     fn matches(&self, id: &ModId, query: &str) -> bool {
         self.keys.get(id).is_some_and(|k| k.contains(query))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mod_data::{ModEntry, ModSource};
+
+    fn entry(package_id: &str, name: &str) -> ModEntry {
+        ModEntry {
+            name: name.to_string(),
+            package_id: ModId::new(package_id),
+            version: String::new(),
+            author: String::new(),
+            supported_versions: Vec::new(),
+            path: std::path::PathBuf::from(format!("/mods/{package_id}")),
+            source: ModSource::Local,
+            dependencies: Vec::new(),
+            load_after: Vec::new(),
+            load_before: Vec::new(),
+            incompatible_with: Vec::new(),
+            description: String::new(),
+            preview_path: None,
+        }
+    }
+
+    /// Каталог из трёх модов, где «a.mod» помечен тегом «Фреймворк».
+    fn fixture() -> (ModDb, Profile, Tags) {
+        let db = ModDb::build(vec![
+            entry("a.mod", "Alpha Framework"),
+            entry("b.mod", "Bravo Content"),
+            entry("c.mod", "Charlie Content"),
+        ]);
+        let mut tags = Tags::new();
+        let framework = tags.create("Фреймворк").unwrap();
+        tags.toggle(&ModId::new("a.mod"), framework);
+        (db, Profile::new(), tags)
+    }
+
+    fn inactive_for(query: &str) -> Vec<String> {
+        let (db, profile, tags) = fixture();
+        let search = SearchState { inactive_query: query.to_string(), ..Default::default() };
+        let mut caches = ListCaches::default();
+        caches.refresh(&db, &profile, &tags, &search);
+        caches.inactive.iter().map(|id| id.as_str().to_string()).collect()
+    }
+
+    #[test]
+    fn empty_query_lists_everything() {
+        assert_eq!(inactive_for(""), ["a.mod", "b.mod", "c.mod"]);
+    }
+
+    #[test]
+    fn tag_query_keeps_only_tagged_mods() {
+        assert_eq!(inactive_for("tag:фреймворк"), ["a.mod"]);
+    }
+
+    #[test]
+    fn tag_query_is_case_insensitive_and_partial() {
+        assert_eq!(inactive_for("TAG:Фрейм"), ["a.mod"]);
+    }
+
+    #[test]
+    fn plain_query_still_matches_name_and_id() {
+        assert_eq!(inactive_for("charlie"), ["c.mod"]);
+        assert_eq!(inactive_for("b.mod"), ["b.mod"]);
+        assert_eq!(inactive_for("content"), ["b.mod", "c.mod"]);
+    }
+
+    #[test]
+    fn tag_name_does_not_leak_into_plain_search() {
+        // «Фреймворк» — только тег, в названии мода его нет; но искать
+        // по нему без префикса тоже допустимо: ключ у мода общий.
+        assert_eq!(inactive_for("фреймворк"), ["a.mod"]);
+        // А мод без тега по нему не находится.
+        assert!(!inactive_for("фреймворк").contains(&"b.mod".to_string()));
+    }
+
+    #[test]
+    fn active_list_follows_profile_order() {
+        let (db, _, tags) = fixture();
+        let mut profile = Profile::new();
+        profile.activate(ModId::new("c.mod"));
+        profile.activate(ModId::new("a.mod"));
+
+        let mut caches = ListCaches::default();
+        caches.refresh(&db, &profile, &tags, &SearchState::default());
+
+        let active: Vec<&str> = caches.active.iter().map(ModId::as_str).collect();
+        let inactive: Vec<&str> = caches.inactive.iter().map(ModId::as_str).collect();
+        assert_eq!(active, ["c.mod", "a.mod"], "порядок загрузки должен сохраняться");
+        assert_eq!(inactive, ["b.mod"]);
     }
 }

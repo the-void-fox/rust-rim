@@ -9,6 +9,7 @@ use std::sync::Mutex;
 
 use rust_rim::app::Action;
 use rust_rim::mod_data::{ModDb, ModEntry, ModId, ModSource, Profile};
+use rust_rim::tags::Tags;
 use rust_rim::ui::list_cache::{ListCaches, SearchState};
 use rust_rim::ui::mod_list::ModList;
 
@@ -75,6 +76,7 @@ struct Harness {
     ctx: egui::Context,
     db: ModDb,
     profile: Profile,
+    tags: Tags,
     caches: ListCaches,
     search: SearchState,
     selected: Option<ModId>,
@@ -92,6 +94,7 @@ impl Harness {
             ctx,
             db,
             profile,
+            tags: Tags::new(),
             caches: ListCaches::default(),
             search: SearchState::default(),
             selected: None,
@@ -118,19 +121,20 @@ impl Harness {
         };
         let db = &self.db;
         let profile = &self.profile;
+        let tags = &self.tags;
         let caches = &mut self.caches;
         let search = &self.search;
         let selected = &mut self.selected;
         let mut req = None;
         let _ = self.ctx.run_ui(input, |root| {
-            caches.refresh(db, profile, search);
+            caches.refresh(db, profile, tags, search);
             egui::CentralPanel::default().show(root, |ui| {
                 ui.columns(2, |cols| {
-                    if let Some(r) = ModList::new(db, &caches.inactive, &caches.warn, selected, false)
+                    if let Some(r) = ModList::new(db, &caches.inactive, &caches.warn, tags, selected, false)
                         .show(&mut cols[0]) {
                         req = Some(r);
                     }
-                    if let Some(r) = ModList::new(db, &caches.active, &caches.warn, selected, true)
+                    if let Some(r) = ModList::new(db, &caches.active, &caches.warn, tags, selected, true)
                         .show(&mut cols[1]) {
                         req = Some(r);
                     }
