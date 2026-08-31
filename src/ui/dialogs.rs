@@ -288,12 +288,19 @@ pub fn settings_dialog(ctx: &Context, open: &mut bool, settings: &mut AppSetting
 
                 // ── Интерфейс ────────────────────────────────────────────
                 SettingsTab::Interface => {
-                    section_header(ui, "ВНЕШНИЙ ВИД");
-                    ui.add_space(8.0);
+                    section_header(ui, "ОПИСАНИЯ МОДОВ");
+                    ui.add_space(4.0);
+                    checkbox_row(ui, &mut settings.load_remote_images,
+                        "Загружать изображения из описаний");
+                    ui.add_space(2.0);
                     ui.horizontal(|ui| {
                         ui.add_space(10.0);
-                        ui.label(RichText::new("Настройки интерфейса будут добавлены в следующей версии.")
-                            .color(theme::TEXT_MUTED).size(11.0).italics());
+                        ui.label(RichText::new(
+                            "Картинки в описаниях лежат на сторонних хостах (CDN Steam, imgur\n\
+                             и любые другие, указанные автором мода). При включении выбор мода\n\
+                             в списке отправляет к ним запрос. Выключено — вместо картинки\n\
+                             показывается ссылка."
+                        ).color(theme::TEXT_MUTED).size(10.5).italics());
                     });
                 }
 

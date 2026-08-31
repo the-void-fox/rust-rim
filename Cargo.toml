@@ -7,7 +7,8 @@ edition = "2024"
 # GUI:
 eframe = { version = "0.35", features = ["default"] }
 egui = "0.35"
-egui_extras = "0.35"
+# Загрузчики изображений для картинок в описаниях модов
+egui_extras = { version = "0.35", features = ["http", "image", "gif", "webp"] }
 egui_commonmark = "0.24"    # Markdown-рендеринг описаний модов
 
 # Сериализация

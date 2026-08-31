@@ -586,7 +586,10 @@ impl RustRim {
 
                 let tex = self.preview.texture_for(ctx, preview_path.as_deref());
                 let selected = self.selected.as_ref().and_then(|id| self.db.get(id));
-                self.details.show(ui, selected, tex);
+                let opts = crate::description::Options {
+                    inline_images: self.settings.load_remote_images,
+                };
+                self.details.show(ui, selected, tex, opts);
             });
     }
 

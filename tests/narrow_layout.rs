@@ -105,7 +105,7 @@ impl Fixture {
                 .show(root, |ui| {
                     ui.set_width(widgets::fit_width(ui));
                     let m = selected.as_ref().and_then(|id| db.get(id));
-                    details.show(ui, m, None);
+                    details.show(ui, m, None, Default::default());
                 });
 
             egui::CentralPanel::default().show(root, |ui| {

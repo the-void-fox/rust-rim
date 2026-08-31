@@ -37,6 +37,9 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            // Нужны для картинок в описаниях; сами по себе запросов не делают —
+            // всё решает настройка «загружать изображения».
+            egui_extras::install_image_loaders(&cc.egui_ctx);
 
             let mut fonts = egui::FontDefinitions::default();
             let font_bytes = include_bytes!("assets/NotoSansSC.ttf").to_vec();

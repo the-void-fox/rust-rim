@@ -21,11 +21,25 @@ const MAX_LABEL: usize = 45;
 const MAX_TABLE_WIDTH: usize = 60;
 const MAX_TABLE_COLUMNS: usize = 3;
 
-/// Преобразует описание мода в Markdown.
+/// Как рендерить описание.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct Options {
+    /// Показывать картинки прямо в описании.
+    ///
+    /// Выключено по умолчанию: описания ссылаются на произвольные хосты,
+    /// и выбор мода в списке превращался бы в сетевой запрос к ним.
+    pub inline_images: bool,
+}
+
+/// Преобразует описание мода в Markdown (без загрузки картинок).
 pub fn to_markdown(raw: &str) -> String {
+    to_markdown_with(raw, Options::default())
+}
+
+pub fn to_markdown_with(raw: &str, opts: Options) -> String {
     let unescaped = unescape(raw);
     let mut out = String::with_capacity(unescaped.len() + unescaped.len() / 4);
-    convert(&unescaped, &mut out);
+    convert(&unescaped, opts, &mut out);
     tidy(&out)
 }
 
@@ -42,7 +56,7 @@ fn unescape(raw: &str) -> std::borrow::Cow<'_, str> {
 
 // ─── Разбор разметки ─────────────────────────────────────────────────────────
 
-fn convert(input: &str, out: &mut String) {
+fn convert(input: &str, opts: Options, out: &mut String) {
     let mut rest = input;
     while !rest.is_empty() {
         let Some(pos) = rest.find(['[', '<']) else {
@@ -53,7 +67,7 @@ fn convert(input: &str, out: &mut String) {
         rest = &rest[pos..];
 
         let consumed = if rest.starts_with('[') {
-            bbcode(rest, out)
+            bbcode(rest, opts, out)
         } else {
             unity(rest, out)
         };
@@ -92,14 +106,14 @@ fn split_until_close<'a>(s: &'a str, tag: &str) -> Option<(&'a str, usize)> {
     Some((&s[..at], at + needle.len()))
 }
 
-fn bbcode(s: &str, out: &mut String) -> Option<usize> {
+fn bbcode(s: &str, opts: Options, out: &mut String) -> Option<usize> {
     let (name, arg, tag_len) = tag_at(s)?;
     let after = &s[tag_len..];
 
     let inline = |marker: &str, out: &mut String| -> Option<usize> {
         let (inner, len) = split_until_close(after, &name)?;
         out.push_str(marker);
-        convert(inner.trim_matches('\n'), out);
+        convert(inner.trim_matches('\n'), opts, out);
         out.push_str(marker);
         Some(tag_len + len)
     };
@@ -118,7 +132,7 @@ fn bbcode(s: &str, out: &mut String) -> Option<usize> {
             out.push_str("\n\n");
             out.push_str(&hashes);
             out.push(' ');
-            convert(inner.trim(), out);
+            convert(inner.trim(), opts, out);
             out.push_str("\n\n");
             Some(tag_len + len)
         }
@@ -131,19 +145,19 @@ fn bbcode(s: &str, out: &mut String) -> Option<usize> {
 
         "img" => {
             let (inner, len) = split_until_close(after, "img")?;
-            emit_image(arg.as_deref().unwrap_or(inner).trim(), out);
+            emit_image(arg.as_deref().unwrap_or(inner).trim(), opts, out);
             Some(tag_len + len)
         }
 
         "list" | "olist" => {
             let (inner, len) = split_until_close(after, &name)?;
-            emit_list(inner, name == "olist", out);
+            emit_list(inner, name == "olist", opts, out);
             Some(tag_len + len)
         }
 
         "table" => {
             let (inner, len) = split_until_close(after, "table")?;
-            emit_table(inner, out);
+            emit_table(inner, opts, out);
             Some(tag_len + len)
         }
 
@@ -164,7 +178,7 @@ fn bbcode(s: &str, out: &mut String) -> Option<usize> {
         "quote" | "spoiler" => {
             let (inner, len) = split_until_close(after, &name)?;
             let mut body = String::new();
-            convert(inner.trim(), &mut body);
+            convert(inner.trim(), opts, &mut body);
             out.push_str("\n\n");
             if name == "spoiler" {
                 out.push_str("> 🔒 ");
@@ -225,7 +239,9 @@ fn is_safe_url(url: &str) -> bool {
 fn emit_link(target: Option<&str>, text: &str, out: &mut String) {
     let url = target.map(str::trim).unwrap_or(text.trim());
     let mut label = String::new();
-    convert(text.trim(), &mut label);
+    // Внутри подписи ссылки картинка всегда остаётся текстом: вложенных
+    // ссылок в Markdown нет, а «[![](i)](l)» ломает разбор.
+    convert(text.trim(), Options { inline_images: false }, &mut label);
     // В описаниях сплошь встречается картинка внутри ссылки:
     // [url=…][img]…[/img][/url]. Вложенных ссылок в Markdown нет — без
     // расплющивания получался «[[текст](A)](B)», который CommonMark
@@ -286,8 +302,14 @@ fn shorten(label: &str) -> String {
 /// Мы не тянем их автоматически: выбор мода в списке не должен порождать
 /// сетевой запрос к постороннему хосту. Вместо этого — обычная ссылка,
 /// открывается по клику.
-fn emit_image(url: &str, out: &mut String) {
+fn emit_image(url: &str, opts: Options, out: &mut String) {
     if !is_safe_url(url) {
+        return;
+    }
+    if opts.inline_images {
+        out.push_str("![](");
+        out.push_str(url);
+        out.push(')');
         return;
     }
     out.push_str("[🖼 изображение](");
@@ -295,11 +317,11 @@ fn emit_image(url: &str, out: &mut String) {
     out.push(')');
 }
 
-fn emit_list(inner: &str, ordered: bool, out: &mut String) {
+fn emit_list(inner: &str, ordered: bool, opts: Options, out: &mut String) {
     out.push('\n');
     for (i, item) in inner.split("[*]").skip(1).enumerate() {
         let mut text = String::new();
-        convert(item.trim(), &mut text);
+        convert(item.trim(), opts, &mut text);
         let text = text.trim();
         if text.is_empty() {
             continue;
@@ -317,10 +339,10 @@ fn emit_list(inner: &str, ordered: bool, out: &mut String) {
     out.push('\n');
 }
 
-fn emit_table(inner: &str, out: &mut String) {
+fn emit_table(inner: &str, opts: Options, out: &mut String) {
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut rest = inner;
-    while let Some((row, consumed)) = next_row(rest) {
+    while let Some((row, consumed)) = next_row(rest, opts) {
         rows.push(row);
         rest = &rest[consumed..];
     }
@@ -337,7 +359,8 @@ fn emit_table(inner: &str, out: &mut String) {
         .map(|r| r.iter().map(|c| visible_len(c) + 3).sum::<usize>())
         .max()
         .unwrap_or(0);
-    if width > MAX_TABLE_COLUMNS || widest_row > MAX_TABLE_WIDTH {
+    // С картинками таблица тем более не переносится — сразу строками.
+    if opts.inline_images || width > MAX_TABLE_COLUMNS || widest_row > MAX_TABLE_WIDTH {
         out.push('\n');
         for row in &rows {
             let line: Vec<&str> = row.iter().map(String::as_str).filter(|c| !c.is_empty()).collect();
@@ -378,7 +401,7 @@ fn visible_len(cell: &str) -> usize {
 }
 
 /// Вырезает очередной `[tr]…[/tr]`, возвращая ячейки и съеденную длину.
-fn next_row(s: &str) -> Option<(Vec<String>, usize)> {
+fn next_row(s: &str, opts: Options) -> Option<(Vec<String>, usize)> {
     let lower = s.to_lowercase();
     let start = lower.find("[tr]")?;
     let body = &s[start + 4..];
@@ -400,7 +423,7 @@ fn next_row(s: &str) -> Option<(Vec<String>, usize)> {
         let after = &rest[at + 4..];
         let Some((cell, consumed)) = split_until_close(after, tag) else { break };
         let mut text = String::new();
-        convert(cell.trim(), &mut text);
+        convert(cell.trim(), opts, &mut text);
         // Вертикальная черта внутри ячейки разорвала бы таблицу.
         cells.push(text.trim().replace('\n', " ").replace('|', "\\|"));
         rest = &after[consumed..];
@@ -530,6 +553,39 @@ mod tests {
             "[🖼 изображение](https://cdn.example/a.png)",
         );
         assert_eq!(to_markdown("[img]file:///etc/passwd[/img]"), "");
+    }
+
+    fn with_images(raw: &str) -> String {
+        to_markdown_with(raw, Options { inline_images: true })
+    }
+
+    #[test]
+    fn inline_images_are_opt_in() {
+        let raw = "[img]https://cdn.example/a.png[/img]";
+        assert_eq!(to_markdown(raw), "[🖼 изображение](https://cdn.example/a.png)");
+        assert_eq!(with_images(raw), "![](https://cdn.example/a.png)");
+    }
+
+    #[test]
+    fn inline_image_inside_link_stays_flat() {
+        // Даже с включёнными картинками подпись ссылки остаётся текстом:
+        // «[![](i)](l)» ломает разбор Markdown.
+        let md = with_images(
+            "[url=https://discord.gg/x][img]https://cdn.example/a.png[/img][/url]",
+        );
+        assert_eq!(md, "[🖼 изображение](https://discord.gg/x)");
+    }
+
+    #[test]
+    fn inline_images_force_table_to_lines() {
+        // Картинки делают таблицу заведомо широкой, а переносить её egui
+        // не умеет — раскладываем строками.
+        let md = with_images(
+            "[table][tr][td][img]https://cdn.example/a.png[/img][/td]\
+             [td][img]https://cdn.example/b.png[/img][/td][/tr][/table]",
+        );
+        assert!(!md.contains('|'), "{md}");
+        assert!(md.contains("![](https://cdn.example/a.png)"), "{md}");
     }
 
     #[test]

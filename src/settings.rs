@@ -33,6 +33,12 @@ pub struct AppSettings {
     /// Путь к Player.log для анализатора логов (пустой — автопоиск).
     #[serde(default)]
     pub log_file_path: String,
+    /// Показывать картинки прямо в описании мода.
+    ///
+    /// Выключено по умолчанию: описания содержат ссылки на произвольные
+    /// хосты, и выбор мода в списке превращался бы в сетевой запрос к ним.
+    #[serde(default)]
+    pub load_remote_images: bool,
     #[serde(skip)]
     pub active_tab: SettingsTab,
 }
@@ -53,6 +59,7 @@ impl Default for AppSettings {
             steamcmd_max_processes: 2,
             steamcmd_multi_threshold: 10,
             log_file_path: String::new(),
+            load_remote_images: false,
             active_tab: SettingsTab::default(),
         }
     }

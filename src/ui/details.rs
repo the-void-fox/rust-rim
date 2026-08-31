@@ -14,7 +14,7 @@ use crate::ui::theme;
 #[derive(Default)]
 pub struct DetailsView {
     md_cache: egui_commonmark::CommonMarkCache,
-    rendered: Option<(ModId, String)>,
+    rendered: Option<(ModId, description::Options, String)>,
 }
 
 impl DetailsView {
@@ -27,15 +27,22 @@ impl DetailsView {
         ui: &mut egui::Ui,
         mod_entry: Option<&ModEntry>,
         preview_tex: Option<&egui::TextureHandle>,
+        opts: description::Options,
     ) {
         let markdown = match mod_entry {
             Some(m) => {
-                let stale = self.rendered.as_ref().is_none_or(|(id, _)| id != &m.package_id);
+                let stale = self
+                    .rendered
+                    .as_ref()
+                    .is_none_or(|(id, cached, _)| id != &m.package_id || *cached != opts);
                 if stale {
-                    self.rendered =
-                        Some((m.package_id.clone(), description::to_markdown(&m.description)));
+                    self.rendered = Some((
+                        m.package_id.clone(),
+                        opts,
+                        description::to_markdown_with(&m.description, opts),
+                    ));
                 }
-                self.rendered.as_ref().map(|(_, md)| md.as_str()).unwrap_or("")
+                self.rendered.as_ref().map(|(_, _, md)| md.as_str()).unwrap_or("")
             }
             None => "",
         };
