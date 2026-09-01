@@ -3,6 +3,7 @@ pub mod details;
 pub mod dialogs;
 pub mod duplicates;
 pub mod fonts;
+pub mod game_session;
 pub mod launch_panel;
 pub mod list_cache;
 pub mod log_panel;

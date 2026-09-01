@@ -9,10 +9,7 @@ use std::collections::HashSet;
 use egui::{Color32, Frame, Margin, RichText, Stroke, Vec2};
 
 use crate::fs_util;
-use crate::game::{launch, paths, Prefix};
-use crate::process::Run;
-use crate::bisect::Hunt;
-use crate::testing::{self, Phase, TestRun};
+use crate::game::paths;
 use crate::mod_data::{
     ModDb, ModId, ModSource, Profile,
     parse_mods_config, scan_dlc_mods, scan_local_mods, write_mod_list, write_mods_config,
@@ -25,10 +22,8 @@ use crate::ui::details::DetailsView;
 use crate::ui::duplicates::DuplicatesUi;
 use crate::ui::list_cache::{ListCaches, SearchState};
 use crate::ui::tags_panel::TagsUi;
-use crate::ui::launch_panel;
-use crate::ui::bisect_panel::{self, BisectUi};
+use crate::ui::game_session::{self, GameSession};
 use crate::ui::updates_panel::{self, UpdatesUi};
-use crate::ui::test_panel::{self, TestUi};
 use crate::ui::validation_panel::{self, ValidationUi};
 use crate::ui::log_panel::LogPanel;
 use crate::ui::mod_list::ModList;
@@ -111,12 +106,8 @@ pub struct RustRim {
     tags: Tags,
     tags_ui: TagsUi,
 
-    /// Автотест сборки через -quicktest.
-    test_run: Option<TestRun>,
-    test_ui: TestUi,
-    /// Поиск виновника: цепочка прогонов с урезанными сборками.
-    bisect: Option<Hunt>,
-    bisect_ui: BisectUi,
+    /// Запуск игры, прогон сборки и поиск виновника.
+    session: GameSession,
 
     /// Проверка обновлений модов мастерской.
     updates_ui: UpdatesUi,
@@ -126,11 +117,6 @@ pub struct RustRim {
     /// Версия игры из Version.txt — нужна для проверки supportedVersions.
     game_version: Option<String>,
 
-    /// Найденные wine-префиксы (обновляются при открытии настроек).
-    detected_prefixes: Vec<Prefix>,
-    /// Запущенная игра вместе с её выводом.
-    game_run: Option<Run>,
-    show_launch_window: bool,
     /// Короткое сообщение пользователю: (текст, это ошибка).
     notice: Option<(String, bool)>,
 
@@ -166,16 +152,10 @@ impl RustRim {
             duplicates: DuplicatesUi::default(),
             tags: Tags::load(),
             tags_ui: TagsUi::default(),
-            test_run: None,
-            test_ui: TestUi::default(),
-            bisect: None,
-            bisect_ui: BisectUi::default(),
+            session: GameSession::default(),
             updates_ui: UpdatesUi::default(),
             validation: ValidationUi::new(),
             game_version: None,
-            detected_prefixes: Vec::new(),
-            game_run: None,
-            show_launch_window: false,
             notice: None,
             steamcmd_panel: SteamCmdPanel::new(),
             workshop_browser: WorkshopBrowser::new(),
@@ -225,56 +205,8 @@ impl RustRim {
     /// Поиск префиксов лезет в несколько папок, поэтому делается один раз
     /// при открытии настроек, а не каждый кадр.
     fn open_settings(&mut self) {
-        self.detected_prefixes = paths::find_prefixes();
+        self.session.refresh_prefixes();
         self.windows.settings = true;
-    }
-
-    fn launch_game(&mut self) {
-        let mut effective = self.settings.launch.clone();
-        if effective.prefix.trim().is_empty() {
-            // Настройки могли не открывать ни разу — ищем префикс сейчас.
-            if self.detected_prefixes.is_empty() {
-                self.detected_prefixes = paths::find_prefixes();
-            }
-            if let Some(p) = self.detected_prefixes.first() {
-                effective.prefix = p.path.to_string_lossy().into_owned();
-            }
-        }
-
-        let game = std::path::Path::new(&self.settings.game_path);
-        let plan = match launch::plan(game, &effective, &launch::Mode::Play) {
-            Ok(plan) => plan,
-            Err(e) => {
-                self.notice = Some((e.to_string(), true));
-                return;
-            }
-        };
-
-        tracing::info!("Launching game: {}", plan.display());
-        let command = plan.display();
-        match Run::spawn(plan.to_command(), command.clone()) {
-            Ok(run) => {
-                self.game_run = Some(run);
-                self.show_launch_window = true;
-            }
-            Err(e) => {
-                self.notice = Some((format!("Не удалось запустить: {e}\n\n{command}"), true));
-            }
-        }
-    }
-
-    /// Живой вывод запуска: без него Proton молчит десятки секунд, и
-    /// непонятно, запускается игра или нет.
-    fn show_launch_window(&mut self, ctx: &egui::Context) {
-        let Some(run) = &mut self.game_run else { return };
-        let finished_now = run.poll();
-        if run.is_running() || finished_now {
-            // Пока идёт вывод, окно обновляется само.
-            ctx.request_repaint_after(std::time::Duration::from_millis(200));
-        }
-        if launch_panel::show(ctx, &mut self.show_launch_window, run) == launch_panel::Reply::Kill {
-            run.kill();
-        }
     }
 
     fn clear_selection(&mut self) {
@@ -611,10 +543,8 @@ impl eframe::App for RustRim {
         self.show_drag_ghost(&ctx);
         self.show_dialogs(&ctx);
         self.show_notice(&ctx);
-        self.show_launch_window(&ctx);
         self.show_validation(&ctx);
-        self.show_test(&ctx);
-        self.show_bisect(&ctx);
+        self.show_session(&ctx);
         self.show_updates(&ctx);
     }
 }
@@ -933,7 +863,7 @@ impl RustRim {
                 ctx,
                 &mut self.windows.settings,
                 &mut self.settings,
-                &self.detected_prefixes,
+                self.session.prefixes(),
             )
         {
             self.settings.save();
@@ -1000,140 +930,35 @@ impl RustRim {
     }
 
     /// Запускает прогон текущей сборки.
-    fn start_test(&mut self) {
-        let active = self.profile.order().to_vec();
-        match self.build_test(&active) {
-            Ok(run) => {
-                self.test_run = Some(run);
-                self.test_ui.reset();
-            }
-            Err(e) => self.notice = Some((e, true)),
-        }
-    }
-
-    /// Готовит прогон произвольного набора модов.
-    ///
-    /// Общее для обычного теста и для поиска виновника: настройки, план
-    /// запуска и уборка процессов у них одни и те же, разный только состав.
-    fn build_test(&mut self, active: &[ModId]) -> Result<TestRun, String> {
-        let Some(prefix) = self.effective_prefix() else {
-            return Err("Не найден wine-префикс: укажите его в Настройки → Запуск.".to_string());
-        };
-        if self.settings.config_path.is_empty() {
-            return Err(
-                "Не задан путь к конфигу игры — прогону некуда положить сборку.".to_string()
-            );
-        }
-
-        let game = std::path::Path::new(&self.settings.game_path);
-        let config_dir = std::path::PathBuf::from(&self.settings.config_path);
-        // Лог кладём рядом с Player.log: под umu игра работает в контейнере
-        // со своим /tmp, и файл на произвольном пути хосту не виден.
-        let log_file = config_dir
-            .parent()
-            .unwrap_or(&config_dir)
-            .join("rustrim-quicktest.log");
-
-        let mut launch_settings = self.settings.launch.clone();
-        launch_settings.prefix = prefix.to_string_lossy().into_owned();
-        let mode = launch::Mode::QuickTest { log_file: log_file.clone() };
-        let plan = launch::plan(game, &launch_settings, &mode).map_err(|e| e.to_string())?;
-
-        let mut config = testing::Config::new(config_dir, log_file);
-        if let Some(exe) = paths::find_executable(game) {
-            config.cleanup = Some((prefix, exe.path().to_path_buf()));
-        }
-
-        TestRun::start(plan.to_command(), plan.display(), config, active)
-            .map_err(|e| format!("Не удалось запустить прогон: {e}"))
-    }
-
-    fn effective_prefix(&mut self) -> Option<std::path::PathBuf> {
-        let configured = self.settings.launch.prefix.trim();
-        if !configured.is_empty() {
-            return Some(std::path::PathBuf::from(configured));
-        }
-        if self.detected_prefixes.is_empty() {
-            self.detected_prefixes = paths::find_prefixes();
-        }
-        self.detected_prefixes.first().map(|p| p.path.clone())
-    }
-
-    fn show_test(&mut self, ctx: &egui::Context) {
-        if let Some(run) = &mut self.test_run {
-            let finished = matches!(run.poll(), Phase::Done(_));
-            if finished {
-                // Разбор лога делается один раз, а не каждый кадр.
-                if !self.test_ui.issues_ready() {
-                    let issues = run.issues(&self.db, &self.profile);
-                    self.test_ui.set_issues(issues);
-                }
-            } else {
-                ctx.request_repaint_after(std::time::Duration::from_millis(500));
-            }
-        }
-
-        match test_panel::show(ctx, &mut self.test_ui, self.test_run.as_ref()) {
-            test_panel::Reply::None => {}
-            test_panel::Reply::Cancel => {
-                if let Some(run) = &mut self.test_run {
-                    run.cancel();
-                }
-            }
-            test_panel::Reply::Restart => self.start_test(),
-            test_panel::Reply::Bisect => self.start_bisect(),
-            test_panel::Reply::Select(id) => {
+    /// Запуск игры, прогон сборки и поиск виновника — одним узлом.
+    fn show_session(&mut self, ctx: &egui::Context) {
+        match self.session.show(ctx, &self.db, &self.profile, &self.settings) {
+            game_session::Reply::None => {}
+            game_session::Reply::Select(id) => {
                 if self.db.contains(&id) {
                     self.selected = Some(id);
                 }
             }
-        }
-    }
-
-    /// Запускает поиск виновника по результатам последнего прогона.
-    fn start_bisect(&mut self) {
-        let issues = self.test_ui.issues().to_vec();
-        self.bisect = Some(Hunt::from_failed_run(&self.db, &self.profile, &issues));
-        self.bisect_ui.open = true;
-    }
-
-    fn show_bisect(&mut self, ctx: &egui::Context) {
-        // Поиск на время работы вынимается из self: чтобы запустить очередной
-        // прогон, ему нужен build_test, а тот забирает self целиком.
-        if let Some(mut hunt) = self.bisect.take() {
-            hunt.poll(&self.db, &self.profile);
-            if let Some(active) = hunt.wants_run() {
-                match self.build_test(&active) {
-                    Ok(run) => hunt.attach(run),
-                    Err(e) => {
-                        self.notice = Some((e, true));
-                        hunt.cancel();
-                    }
-                }
-            }
-            if !hunt.is_done() {
-                ctx.request_repaint_after(std::time::Duration::from_millis(500));
-            }
-            self.bisect = Some(hunt);
-        }
-
-        match bisect_panel::show(ctx, &mut self.bisect_ui, self.bisect.as_ref(), &self.db) {
-            bisect_panel::Reply::None => {}
-            bisect_panel::Reply::Cancel => {
-                if let Some(hunt) = &mut self.bisect {
-                    hunt.cancel();
-                }
-            }
-            bisect_panel::Reply::Select(id) => {
-                if self.db.contains(&id) {
-                    self.selected = Some(id);
-                }
-            }
-            bisect_panel::Reply::Deactivate(ids) => {
+            game_session::Reply::Deactivate(ids) => {
                 for id in ids {
                     self.apply(Action::Deactivate(id));
                 }
             }
+            game_session::Reply::Failed(e) => self.notice = Some((e, true)),
+        }
+    }
+
+    fn launch_game(&mut self) {
+        if let Err(e) = self.session.launch(&self.settings) {
+            self.notice = Some((e, true));
+        }
+    }
+
+    fn start_test(&mut self) {
+        let active = self.profile.order().to_vec();
+        self.session.open_test_window();
+        if let Err(e) = self.session.start_test(&self.settings, &active) {
+            self.notice = Some((e, true));
         }
     }
 
