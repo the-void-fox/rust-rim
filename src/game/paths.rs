@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn finds_data_dir_for_any_prefix_user() {
         // Proton заводит steamuser, обычный wine — имя из системы.
-        for user in ["steamuser", "voidfox"] {
+        for user in ["steamuser", "someone"] {
             let t = TempTree::new(&format!("prefix_{user}"));
             let data = t.dir(&format!(
                 "pfx/drive_c/users/{user}/AppData/LocalLow/Ludeon Studios/RimWorld by Ludeon Studios"
