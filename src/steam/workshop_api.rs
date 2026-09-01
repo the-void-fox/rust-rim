@@ -115,6 +115,65 @@ pub fn fetch_workshop_page(
     Ok((items, has_next_page(&data)))
 }
 
+// ─── Сведения о предметах мастерской ─────────────────────────────────────────
+
+/// Что Steam знает о предмете мастерской.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedFile {
+    pub id: u64,
+    pub title: String,
+    /// Когда мод обновляли последний раз, секунды с эпохи.
+    pub time_updated: u64,
+}
+
+/// За один запрос спрашиваем не больше этого — иначе тело запроса разрастается,
+/// а Steam начинает подрезать ответ.
+const DETAILS_CHUNK: usize = 100;
+
+/// Спрашивает у Steam сведения о предметах мастерской.
+///
+/// Метод `GetPublishedFileDetails` работает без ключа API — проверено на живых
+/// запросах. Это единственный способ узнать время обновления мода, не подписываясь
+/// на него в клиенте Steam.
+///
+/// Идентификаторы, о которых Steam ничего не знает (мод удалён или скрыт),
+/// в ответе просто отсутствуют — это не ошибка.
+pub fn fetch_published_files(ids: &[u64]) -> Result<Vec<PublishedFile>> {
+    let mut out = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(DETAILS_CHUNK) {
+        let mut body = format!("itemcount={}", chunk.len());
+        for (i, id) in chunk.iter().enumerate() {
+            let _ = write!(body, "&publishedfileids%5B{i}%5D={id}");
+        }
+        let json = post_form(
+            "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/",
+            &body,
+        )?;
+        out.extend(parse_published_files(&json));
+    }
+    Ok(out)
+}
+
+fn parse_published_files(json: &Value) -> Vec<PublishedFile> {
+    json["response"]["publishedfiledetails"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|f| {
+                    // Время нулевое у предметов, которых больше нет: судить
+                    // по ним об обновлениях нельзя.
+                    let time_updated = f["time_updated"].as_u64().filter(|t| *t > 0)?;
+                    Some(PublishedFile {
+                        id: f["publishedfileid"].as_str()?.parse().ok()?,
+                        title: f["title"].as_str().unwrap_or_default().to_string(),
+                        time_updated,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 // ─── Сборки (Collections) ────────────────────────────────────────────────────
 
 pub fn fetch_collections_page(

@@ -27,6 +27,7 @@ use crate::ui::list_cache::{ListCaches, SearchState};
 use crate::ui::tags_panel::TagsUi;
 use crate::ui::launch_panel;
 use crate::ui::bisect_panel::{self, BisectUi};
+use crate::ui::updates_panel::{self, UpdatesUi};
 use crate::ui::test_panel::{self, TestUi};
 use crate::ui::validation_panel::{self, ValidationUi};
 use crate::ui::log_panel::LogPanel;
@@ -117,6 +118,9 @@ pub struct RustRim {
     bisect: Option<Hunt>,
     bisect_ui: BisectUi,
 
+    /// Проверка обновлений модов мастерской.
+    updates_ui: UpdatesUi,
+
     /// Проверка сборки: диагностики и окно с ними.
     validation: ValidationUi,
     /// Версия игры из Version.txt — нужна для проверки supportedVersions.
@@ -166,6 +170,7 @@ impl RustRim {
             test_ui: TestUi::default(),
             bisect: None,
             bisect_ui: BisectUi::default(),
+            updates_ui: UpdatesUi::default(),
             validation: ValidationUi::new(),
             game_version: None,
             detected_prefixes: Vec::new(),
@@ -610,6 +615,7 @@ impl eframe::App for RustRim {
         self.show_validation(&ctx);
         self.show_test(&ctx);
         self.show_bisect(&ctx);
+        self.show_updates(&ctx);
     }
 }
 
@@ -631,6 +637,7 @@ impl RustRim {
         if resp.workshop_clicked  { self.windows.workshop = true; }
         if resp.logs_clicked      { self.windows.logs = true; }
         if resp.reload_clicked    { self.reload_mods(); }
+        if resp.updates_clicked   { self.updates_ui.open = true; }
         if resp.tags_clicked      { self.tags_ui.open = true; }
         if resp.play_clicked      { self.launch_game(); }
         if resp.check_clicked     { self.revalidate(); self.validation.open = true; }
@@ -1130,6 +1137,43 @@ impl RustRim {
         }
     }
 
+    fn show_updates(&mut self, ctx: &egui::Context) {
+        if self.updates_ui.job.poll() {
+            // Отмечаем всё найденное: обновляют обычно пачкой.
+            if let Some(found) = self.updates_ui.job.result() {
+                let found = found.clone();
+                self.updates_ui.select_all(&found);
+            }
+            ctx.request_repaint();
+        } else if self.updates_ui.job.is_running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(300));
+        }
+
+        match updates_panel::show(ctx, &mut self.updates_ui, &self.db) {
+            updates_panel::Reply::None => {}
+            updates_panel::Reply::Check => self.start_update_check(),
+            updates_panel::Reply::Select(id) => {
+                if self.db.contains(&id) {
+                    self.selected = Some(id);
+                }
+            }
+            updates_panel::Reply::Download(ids) => {
+                // Обновление — это та же закачка: SteamCMD перезапишет папку.
+                self.steamcmd_panel.add_ids(&ids);
+                self.windows.steamcmd = true;
+            }
+        }
+    }
+
+    /// Спрашивает мастерскую о свежести установленных модов.
+    fn start_update_check(&mut self) {
+        let installed = crate::updates::installed_workshop_mods(&self.db);
+        self.updates_ui.reset();
+        self.updates_ui.job = crate::job::Job::spawn(move || {
+            crate::updates::check(&installed).map_err(|e| e.to_string())
+        });
+    }
+
     fn show_validation(&mut self, ctx: &egui::Context) {
         match validation_panel::show(ctx, &mut self.validation, &self.db) {
             validation_panel::Reply::None => {}
@@ -1144,6 +1188,12 @@ impl RustRim {
             Fix::Activate(id) => self.apply(Action::Activate(id)),
             Fix::Deactivate(id) => self.apply(Action::Deactivate(id)),
             Fix::Sort => self.sort_active_mods(),
+            // Не качаем сразу: ставим в очередь SteamCMD и открываем её, чтобы
+            // недостающие зависимости можно было набрать пачкой и скачать разом.
+            Fix::Download(workshop_id) => {
+                self.steamcmd_panel.add_ids(&[workshop_id]);
+                self.windows.steamcmd = true;
+            }
         }
     }
 

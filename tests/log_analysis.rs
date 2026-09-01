@@ -13,6 +13,7 @@ fn fake_mod(name: &str, package_id: &str, folder: &str) -> ModEntry {
         path: std::path::PathBuf::from(format!("/home/user/Mods/{folder}")),
         source: ModSource::Local,
         dependencies: Vec::new(),
+        dependency_sources: Vec::new(),
         load_after: Vec::new(),
         load_before: Vec::new(),
         incompatible_with: Vec::new(),

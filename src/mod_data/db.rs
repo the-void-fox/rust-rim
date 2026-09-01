@@ -149,6 +149,7 @@ mod tests {
             path: PathBuf::from(path),
             source,
             dependencies: Vec::new(),
+            dependency_sources: Vec::new(),
             load_after: Vec::new(),
             load_before: Vec::new(),
             incompatible_with: Vec::new(),

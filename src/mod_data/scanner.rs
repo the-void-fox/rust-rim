@@ -11,6 +11,10 @@ fn to_ids(ids: Vec<String>) -> Vec<ModId> {
     ids.into_iter().map(ModId::from).collect()
 }
 
+fn to_sources(pairs: Vec<(String, u64)>) -> Vec<(ModId, u64)> {
+    pairs.into_iter().map(|(id, workshop)| (ModId::from(id), workshop)).collect()
+}
+
 /// Ищет превью-изображение в папке `mod_dir/About/` без учёта регистра.
 /// Поддерживает: Preview.png, preview.png, Preview.jpg, preview.jpeg и т.д.
 fn find_preview_image(mod_dir: &Path) -> Option<std::path::PathBuf> {
@@ -39,7 +43,13 @@ fn find_preview_image(mod_dir: &Path) -> Option<std::path::PathBuf> {
 /// Поднимать при изменении формата ModEntry или логики парсинга —
 /// старый кэш будет отброшен целиком.
 /// v2: из ModEntry убран is_active (уехал в Profile).
-const CACHE_VERSION: u32 = 2;
+/// v3: добавлены dependency_sources — ссылки на мастерскую для зависимостей.
+///
+/// Поле помечено `#[serde(default)]`, поэтому старый кэш читался бы молча и
+/// отдавал пустой список: на живой установке из 902 модов ссылок находилось
+/// ноль, хотя в About.xml они есть. Версия и нужна, чтобы такое не всплывало
+/// как «парсер не работает».
+const CACHE_VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize, Default)]
 struct ScanCache {
@@ -109,6 +119,7 @@ fn parse_mod_dir(mod_dir: &Path) -> Option<ModEntry> {
             path: mod_dir.to_path_buf(),
             source: source_for_folder(&folder_name),
             dependencies:      to_ids(data.dependencies),
+            dependency_sources: to_sources(data.dependency_sources),
             load_after:        to_ids(data.load_after),
             load_before:       to_ids(data.load_before),
             incompatible_with: to_ids(data.incompatible_with),
@@ -268,6 +279,7 @@ pub fn scan_dlc_mods(game_path: &Path) -> Vec<ModEntry> {
                     path: mod_dir.clone(),
                     source,
                     dependencies:     to_ids(data.dependencies),
+                    dependency_sources: to_sources(data.dependency_sources),
                     load_after:       to_ids(data.load_after),
                     load_before:      to_ids(data.load_before),
                     incompatible_with: to_ids(data.incompatible_with),

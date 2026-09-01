@@ -13,6 +13,7 @@ pub mod process;
 pub mod settings;
 pub mod sorting;
 pub mod tags;
+pub mod updates;
 pub mod testing;
 pub mod steam;
 pub mod ui;

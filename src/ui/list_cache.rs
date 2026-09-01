@@ -134,6 +134,7 @@ mod tests {
             path: std::path::PathBuf::from(format!("/mods/{package_id}")),
             source: ModSource::Local,
             dependencies: Vec::new(),
+            dependency_sources: Vec::new(),
             load_after: Vec::new(),
             load_before: Vec::new(),
             incompatible_with: Vec::new(),

@@ -12,6 +12,7 @@ pub mod steamcmd_panel;
 pub mod tags_panel;
 pub mod test_panel;
 pub mod theme;
+pub mod updates_panel;
 pub mod toolbar;
 pub mod validation_panel;
 pub mod widgets;

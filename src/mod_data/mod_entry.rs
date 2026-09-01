@@ -19,6 +19,10 @@ pub struct ModEntry {
 
     // Зависимости и порядок загрузки
     pub dependencies: Vec<ModId>,
+    /// Откуда качать зависимость, если её нет: (packageId, Workshop ID).
+    /// Заполняется не всегда — мод обязан указать ссылку сам.
+    #[serde(default)]
+    pub dependency_sources: Vec<(ModId, u64)>,
     pub load_after: Vec<ModId>,
     pub load_before: Vec<ModId>,
     pub incompatible_with: Vec<ModId>,

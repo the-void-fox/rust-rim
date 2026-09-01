@@ -31,6 +31,10 @@ fn main() {
         Profile::from_raw_ids(&active, &db)
     };
 
+    let with_sources = db.iter().filter(|m| !m.dependency_sources.is_empty()).count();
+    let total_sources: usize = db.iter().map(|m| m.dependency_sources.len()).sum();
+    println!("Модов со ссылками на зависимости: {with_sources}, ссылок всего: {total_sources}");
+
     let version = paths::game_version(std::path::Path::new(&game));
     println!(
         "Каталог: {} модов, сборка: {} из {} записей конфига, версия игры: {}",
@@ -59,6 +63,20 @@ fn main() {
         println!("  {n:5}  {rule}");
     }
     println!();
+
+    // Что из этого чинится одной кнопкой.
+    use rust_rim::validation::Fix;
+    let (mut activate, mut download, mut none) = (0usize, 0usize, 0usize);
+    for d in &diagnostics {
+        match d.fix {
+            Some(Fix::Download(_)) => download += 1,
+            Some(_) => activate += 1,
+            None => none += 1,
+        }
+    }
+    println!(
+        "Чинится кнопкой: {activate}, скачивается из мастерской: {download}, вручную: {none}\n",
+    );
 
     for d in diagnostics.iter().take(if all { 6 } else { usize::MAX }) {
         let mark = if d.severity == Severity::Error { "✕" } else { "⚠" };

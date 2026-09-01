@@ -201,5 +201,6 @@ fn fix_label(fix: &Fix, db: &ModDb) -> String {
         Fix::Activate(id) => format!("Включить «{}»", name(id)),
         Fix::Deactivate(id) => format!("Выключить «{}»", name(id)),
         Fix::Sort => "Сортировать".to_string(),
+        Fix::Download(_) => "⬇ Скачать".to_string(),
     }
 }

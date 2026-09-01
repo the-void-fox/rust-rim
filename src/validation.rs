@@ -27,6 +27,8 @@ pub enum Fix {
     Deactivate(ModId),
     /// Пересортировать активные моды.
     Sort,
+    /// Скачать недостающий мод из мастерской через SteamCMD.
+    Download(u64),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -115,10 +117,20 @@ fn missing_dependencies(db: &ModDb, profile: &Profile, out: &mut Vec<Diagnostic>
                 continue;
             }
             let installed = db.contains(dep);
+            // Мод обязан сам сказать, где взять зависимость: RimWorld требует
+            // <steamWorkshopUrl> и ругается в лог, если его нет.
+            let source = m
+                .dependency_sources
+                .iter()
+                .find(|(d, _)| d == dep)
+                .map(|(_, workshop)| *workshop);
+
             let detail = if installed {
                 format!("«{}» установлен, но выключен.", name_of(db, dep))
+            } else if source.is_some() {
+                format!("«{dep}» не установлен. Его можно скачать из мастерской.")
             } else {
-                format!("«{dep}» вообще не установлен — его нужно скачать.")
+                format!("«{dep}» не установлен, а ссылки на мастерскую мод не дал.")
             };
             let mut diag = Diagnostic::new(
                 Severity::Error,
@@ -127,9 +139,11 @@ fn missing_dependencies(db: &ModDb, profile: &Profile, out: &mut Vec<Diagnostic>
                 detail,
             )
             .about([id.clone(), dep.clone()]);
-            if installed {
-                diag = diag.with_fix(Fix::Activate(dep.clone()));
-            }
+            diag.fix = match (installed, source) {
+                (true, _) => Some(Fix::Activate(dep.clone())),
+                (false, Some(workshop)) => Some(Fix::Download(workshop)),
+                (false, None) => None,
+            };
             out.push(diag);
         }
     }
@@ -298,6 +312,7 @@ mod tests {
                 path: std::path::PathBuf::from(format!("/mods/{id}")),
                 source: ModSource::Local,
                 dependencies: Vec::new(),
+                dependency_sources: Vec::new(),
                 load_after: Vec::new(),
                 load_before: Vec::new(),
                 incompatible_with: Vec::new(),
@@ -311,6 +326,12 @@ mod tests {
         }
         fn deps(mut self, ids: &[&str]) -> Self {
             self.0.dependencies = ids.iter().map(|s| ModId::new(s)).collect();
+            self
+        }
+        /// Зависимость со ссылкой на мастерскую.
+        fn dep_from_workshop(mut self, id: &str, workshop: u64) -> Self {
+            self.0.dependencies.push(ModId::new(id));
+            self.0.dependency_sources.push((ModId::new(id), workshop));
             self
         }
         fn after(mut self, ids: &[&str]) -> Self {
@@ -372,15 +393,42 @@ mod tests {
     }
 
     #[test]
-    fn dependency_that_is_not_installed_has_no_fix() {
+    fn dependency_that_is_not_installed_has_no_fix_without_a_link() {
         let (db, profile) = setup(
             vec![core(), B::new("a.mod").deps(&["nowhere.mod"])],
             &["ludeon.rimworld", "a.mod"],
         );
         let diags = validate(&db, &profile, None);
         let dep = diags.iter().find(|d| d.rule == "missing-dependency").unwrap();
-        assert_eq!(dep.fix, None, "включать нечего — мод не установлен");
+        assert_eq!(dep.fix, None, "включать нечего, а качать неоткуда");
         assert!(dep.detail.contains("не установлен"), "{}", dep.detail);
+    }
+
+    #[test]
+    fn a_missing_dependency_with_a_link_can_be_downloaded() {
+        let (db, profile) = setup(
+            vec![core(), B::new("a.mod").dep_from_workshop("brrainz.harmony", 2009463077)],
+            &["ludeon.rimworld", "a.mod"],
+        );
+        let diags = validate(&db, &profile, None);
+        let dep = diags.iter().find(|d| d.rule == "missing-dependency").unwrap();
+        assert_eq!(dep.fix, Some(Fix::Download(2009463077)));
+    }
+
+    #[test]
+    fn an_installed_dependency_is_activated_not_downloaded() {
+        // Ссылка есть, но качать нечего: мод уже на диске, просто выключен.
+        let (db, profile) = setup(
+            vec![
+                core(),
+                B::new("a.mod").dep_from_workshop("lib.mod", 2009463077),
+                B::new("lib.mod"),
+            ],
+            &["ludeon.rimworld", "a.mod"],
+        );
+        let diags = validate(&db, &profile, None);
+        let dep = diags.iter().find(|d| d.rule == "missing-dependency").unwrap();
+        assert_eq!(dep.fix, Some(Fix::Activate(ModId::new("lib.mod"))));
     }
 
     #[test]

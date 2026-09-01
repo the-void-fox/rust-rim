@@ -27,6 +27,7 @@ fn fake_mod(i: usize) -> ModEntry {
         path: std::path::PathBuf::from(format!("/mods/{i}")),
         source: if i % 3 == 0 { ModSource::Workshop(1000 + i as u64) } else { ModSource::Local },
         dependencies: vec![ModId::new("missing.dependency")],
+        dependency_sources: Vec::new(),
         load_after: Vec::new(),
         load_before: Vec::new(),
         incompatible_with: vec![ModId::new("author1.mod1")],

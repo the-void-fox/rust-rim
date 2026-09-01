@@ -60,6 +60,7 @@ fn fake_mod(i: usize) -> ModEntry {
         } else {
             Vec::new()
         },
+        dependency_sources: Vec::new(),
         load_after: Vec::new(),
         load_before: Vec::new(),
         incompatible_with: if i % 11 == 0 {
