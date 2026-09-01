@@ -69,7 +69,7 @@ impl LogPanel {
         }
 
         let mut selected: Option<ModId> = None;
-        egui::Window::new("📜  Анализ логов RimWorld")
+        egui::Window::new("☰  Анализ логов RimWorld")
             .open(open)
             .collapsible(false)
             .resizable(true)
@@ -133,7 +133,7 @@ impl LogPanel {
                 {
                     self.start_analysis(db, profile);
                 }
-                if ui.button("📂 Выбрать…").clicked() {
+                if ui.button("▤ Выбрать…").clicked() {
                     let mut dlg = rfd::FileDialog::new()
                         .add_filter("Логи", &["log", "txt"]);
                     if let Some(dir) = self.path.as_ref().and_then(|p| p.parent()) {
@@ -158,7 +158,7 @@ impl LogPanel {
                 let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
                 let warns = issues.len() - errors;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(format!("✕ {errors}")).color(theme::ERROR_RED).size(11.0));
+                    ui.label(RichText::new(format!("× {errors}")).color(theme::ERROR_RED).size(11.0));
                     ui.label(RichText::new(format!("⚠ {warns}")).color(theme::WARNING_AMBER).size(11.0));
                 });
             }
@@ -195,7 +195,7 @@ impl LogPanel {
                 if issues.is_empty() {
                     ui.add_space(20.0);
                     ui.vertical_centered(|ui| {
-                        ui.label(RichText::new("Ошибок не найдено 🎉")
+                        ui.label(RichText::new("Ошибок не найдено ★")
                             .color(theme::ACTIVE_GREEN));
                     });
                 } else {
@@ -239,7 +239,7 @@ fn draw_issue(
     let mut selected = None;
 
     let (mark, mark_color) = match issue.severity {
-        Severity::Error => ("✕", theme::ERROR_RED),
+        Severity::Error => ("×", theme::ERROR_RED),
         Severity::Warning => ("⚠", theme::WARNING_AMBER),
     };
 
@@ -261,7 +261,7 @@ fn draw_issue(
                     if ui.small_button(expand_label).clicked() {
                         *toggle = Some(idx);
                     }
-                    if expanded && ui.small_button("📋").on_hover_text("Скопировать текст").clicked() {
+                    if expanded && ui.small_button("⎘").on_hover_text("Скопировать текст").clicked() {
                         ui.ctx().copy_text(issue.full_text.clone());
                     }
                 });

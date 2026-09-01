@@ -53,7 +53,7 @@ pub fn open_folder_dialog(ctx: &Context, open: &mut bool, settings: &mut AppSett
 
     let mut load_requested = false;
 
-    Window::new(RichText::new("📂  Настройка путей").color(theme::TEXT_PRIMARY).size(13.0).strong())
+    Window::new(RichText::new("▤  Настройка путей").color(theme::TEXT_PRIMARY).size(13.0).strong())
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
@@ -159,7 +159,7 @@ pub fn save_dialog(
 
     let mut save_confirmed = false;
 
-    Window::new(RichText::new("💾  Сохранить список модов").color(theme::TEXT_PRIMARY).size(13.0).strong())
+    Window::new(RichText::new("⇩  Сохранить список модов").color(theme::TEXT_PRIMARY).size(13.0).strong())
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
@@ -206,7 +206,7 @@ pub fn save_dialog(
             ui.horizontal(|ui| {
                 let can_save = !config_path.is_empty();
                 let save_btn = Button::new(
-                    RichText::new("  💾 Сохранить  ").color(theme::TEXT_PRIMARY).size(12.0)
+                    RichText::new("  ⇩ Сохранить  ").color(theme::TEXT_PRIMARY).size(12.0)
                 ).fill(theme::HEADER_RIGHT)
                  .stroke(Stroke::new(1.0, theme::ACTIVE_GREEN.gamma_multiply(0.5)));
 
@@ -252,9 +252,9 @@ pub fn settings_dialog(
 
             // ── Вкладки ──────────────────────────────────────────────────
             ui.horizontal(|ui| {
-                tab_button(ui, "📁  Пути",       settings.active_tab == SettingsTab::Paths,     || settings.active_tab = SettingsTab::Paths);
+                tab_button(ui, "▤  Пути",       settings.active_tab == SettingsTab::Paths,     || settings.active_tab = SettingsTab::Paths);
                 tab_button(ui, "▶  Запуск",      settings.active_tab == SettingsTab::Launch,     || settings.active_tab = SettingsTab::Launch);
-                tab_button(ui, "🎨  Интерфейс",  settings.active_tab == SettingsTab::Interface,  || settings.active_tab = SettingsTab::Interface);
+                tab_button(ui, "❖  Интерфейс",  settings.active_tab == SettingsTab::Interface,  || settings.active_tab = SettingsTab::Interface);
                 tab_button(ui, "⚙  Поведение",   settings.active_tab == SettingsTab::Behavior,   || settings.active_tab = SettingsTab::Behavior);
             });
 

@@ -51,7 +51,7 @@ pub fn search_bar(ui: &mut egui::Ui, query: &mut String, id: &str) {
         .inner_margin(Margin::symmetric(6, 3))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("🔍").size(12.0).color(theme::TEXT_MUTED));
+                ui.label(RichText::new("⊙").size(12.0).color(theme::TEXT_MUTED));
                 let edit = egui::TextEdit::singleline(query)
                     .hint_text("Поиск...")
                     .id(egui::Id::new(id))
@@ -60,7 +60,7 @@ pub fn search_bar(ui: &mut egui::Ui, query: &mut String, id: &str) {
                     .text_color(theme::TEXT_PRIMARY);
                 ui.add(edit);
                 if !query.is_empty()
-                    && ui.small_button(RichText::new("✕").color(theme::TEXT_MUTED)).clicked()
+                    && ui.small_button(RichText::new("×").color(theme::TEXT_MUTED)).clicked()
                 {
                     query.clear();
                 }

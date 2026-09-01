@@ -436,7 +436,7 @@ fn run_download(
     // Ненулевой код выхода — считаем все моды неудачными (напр. steamcmd не запустился).
     if !status.success() && failed.is_empty() {
         let _ = tx.send(DownloadEvent::Log(format!(
-            "✕ SteamCMD завершился с ошибкой (код {})",
+            "× SteamCMD завершился с ошибкой (код {})",
             status.code().unwrap_or(-1)
         )));
         let all_ids: Vec<u64> = ids.to_vec();

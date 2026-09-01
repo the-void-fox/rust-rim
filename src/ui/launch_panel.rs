@@ -60,8 +60,8 @@ fn status_row(ui: &mut egui::Ui, run: &Run, reply: &mut Reply) {
             );
         } else {
             let (mark, color, text) = match run.status().and_then(|s| s.code()) {
-                Some(0) => ("✔", theme::ACTIVE_GREEN, "Игра закрыта".to_string()),
-                Some(code) => ("✕", theme::ERROR_RED, format!("Завершилась с кодом {code}")),
+                Some(0) => ("✓", theme::ACTIVE_GREEN, "Игра закрыта".to_string()),
+                Some(code) => ("×", theme::ERROR_RED, format!("Завершилась с кодом {code}")),
                 None => ("■", theme::TEXT_MUTED, "Процесс снят".to_string()),
             };
             ui.label(RichText::new(mark).color(color).size(12.0));

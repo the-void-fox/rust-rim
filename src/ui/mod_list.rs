@@ -239,7 +239,7 @@ impl<'a> ModList<'a> {
 
                     // Предупреждение
                     let warn_text: Option<(&str, Color32, &str)> = if has_incompat {
-                        Some(("✕", theme::ERROR_RED, "Конфликт с активным модом"))
+                        Some(("×", theme::ERROR_RED, "Конфликт с активным модом"))
                     } else if has_missing_deps && self.is_active {
                         Some(("⚠", theme::WARNING_AMBER, "Отсутствуют зависимости"))
                     } else {
@@ -315,7 +315,7 @@ impl<'a> ModList<'a> {
                             ui.close();
                         }
                         ui.separator();
-                        ui.menu_button("🏷  Теги", |ui| {
+                        ui.menu_button("⚑  Теги", |ui| {
                             ui.set_min_width(180.0);
                             if self.tags.is_empty() {
                                 ui.label(RichText::new("тегов пока нет")
@@ -340,7 +340,7 @@ impl<'a> ModList<'a> {
                             }
                         });
                         ui.separator();
-                        if ui.button("📁  Открыть папку").clicked() {
+                        if ui.button("▤  Открыть папку").clicked() {
                             action = Some(Action::OpenFolder(id.clone()));
                             ui.close();
                         }

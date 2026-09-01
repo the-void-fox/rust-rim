@@ -181,7 +181,7 @@ fn bbcode(s: &str, opts: Options, out: &mut String) -> Option<usize> {
             convert(inner.trim(), opts, &mut body);
             out.push_str("\n\n");
             if name == "spoiler" {
-                out.push_str("> 🔒 ");
+                out.push_str("> ⛨ ");
                 out.push_str(body.trim().replace('\n', "\n> ").as_str());
             } else {
                 out.push_str("> ");
@@ -652,7 +652,7 @@ mod tests {
     #[test]
     fn quote_and_spoiler_become_blockquotes() {
         assert_eq!(to_markdown("[quote]цитата[/quote]"), "> цитата");
-        assert!(to_markdown("[spoiler]секрет[/spoiler]").starts_with("> 🔒"));
+        assert!(to_markdown("[spoiler]секрет[/spoiler]").starts_with("> ⛨"));
     }
 
     #[test]

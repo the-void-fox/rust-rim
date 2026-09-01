@@ -170,7 +170,7 @@ fn show_banner(ui: &mut egui::Ui, m: &ModEntry, preview_tex: Option<&egui::Textu
         let draw_rect = egui::Rect::from_center_size(img_rect.center(), tex_size * scale);
         ui.painter().image(tex.id(), draw_rect, uv, Color32::WHITE);
     } else {
-        let icon = if m.preview_path.is_some() { "⏳" } else { "◫" };
+        let icon = if m.preview_path.is_some() { "⏱" } else { "▣" };
         ui.painter().text(
             img_rect.center(),
             Align2::CENTER_CENTER,

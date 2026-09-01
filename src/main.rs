@@ -41,25 +41,9 @@ fn main() -> eframe::Result<()> {
             // всё решает настройка «загружать изображения».
             egui_extras::install_image_loaders(&cc.egui_ctx);
 
-            let mut fonts = egui::FontDefinitions::default();
-            let font_bytes = include_bytes!("assets/NotoSansSC.ttf").to_vec();
-            fonts.font_data.insert(
-                "NotoSansSC".to_owned(),
-                egui::FontData::from_owned(font_bytes).into(),
-            );
-
-            fonts
-                .families
-                .entry(egui::FontFamily::Proportional)
-                .or_default()
-                .insert(0, "NotoSansSC".to_owned());
-            fonts
-                .families
-                .entry(egui::FontFamily::Monospace)
-                .or_default()
-                .insert(0, "NotoSansSC".to_owned());
-
-            cc.egui_ctx.set_fonts(fonts);
+            // Набор собран в библиотеке: tests/glyph_coverage.rs проверяет по
+            // нему, что каждый символ интерфейса действительно рисуется.
+            cc.egui_ctx.set_fonts(rust_rim::ui::fonts::definitions());
             cc.egui_ctx.set_pixels_per_point(1.4);
 
             Ok(Box::new(RustRim::default()))

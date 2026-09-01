@@ -190,7 +190,7 @@ impl WorkshopBrowser {
         }
 
         let mut result = None;
-        egui::Window::new("🔍  Steam Workshop — Браузер модов")
+        egui::Window::new("⚒  Steam Workshop — Браузер модов")
             .open(open)
             .collapsible(false)
             .resizable(true)
@@ -330,8 +330,8 @@ impl WorkshopBrowser {
             .inner_margin(Margin::symmetric(8, 4))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    tab_btn(ui, "📦  Моды",    self.active_tab == BrowserTab::Mods,        || self.active_tab = BrowserTab::Mods);
-                    tab_btn(ui, "📚  Сборки",  self.active_tab == BrowserTab::Collections,  || self.active_tab = BrowserTab::Collections);
+                    tab_btn(ui, "▣  Моды",    self.active_tab == BrowserTab::Mods,        || self.active_tab = BrowserTab::Mods);
+                    tab_btn(ui, "▤  Сборки",  self.active_tab == BrowserTab::Collections,  || self.active_tab = BrowserTab::Collections);
                 });
             });
 
@@ -359,7 +359,7 @@ impl WorkshopBrowser {
                         egui::TextEdit::singleline(&mut self.search_input)
                             .hint_text("Поиск модов RimWorld..."),
                     );
-                    let search = ui.button(RichText::new("🔍").size(12.0))
+                    let search = ui.button(RichText::new("⊙").size(12.0))
                         .on_hover_text("Найти").clicked()
                         || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
                     if search { self.page = 1; do_fetch = true; }
@@ -409,7 +409,7 @@ impl WorkshopBrowser {
                         ui.add_space(50.0);
                         ui.vertical_centered(|ui| {
                             ui.label(
-                                RichText::new("Нажмите 🔍 для просмотра популярных модов")
+                                RichText::new("Нажмите ⊙ для просмотра популярных модов")
                                     .color(theme::TEXT_MUTED).size(12.0).italics(),
                             );
                         });
@@ -606,7 +606,7 @@ impl WorkshopBrowser {
                         egui::TextEdit::singleline(&mut self.coll_search)
                             .hint_text("Поиск сборок RimWorld..."),
                     );
-                    let search = ui.button(RichText::new("🔍").size(12.0))
+                    let search = ui.button(RichText::new("⊙").size(12.0))
                         .on_hover_text("Найти").clicked()
                         || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
                     if search { self.coll_page = 1; do_coll_fetch = true; }
@@ -675,7 +675,7 @@ impl WorkshopBrowser {
                         ui.add_space(50.0);
                         ui.vertical_centered(|ui| {
                             ui.label(
-                                RichText::new("Нажмите 🔍 для просмотра популярных сборок")
+                                RichText::new("Нажмите ⊙ для просмотра популярных сборок")
                                     .color(theme::TEXT_MUTED).size(12.0).italics(),
                             );
                         });

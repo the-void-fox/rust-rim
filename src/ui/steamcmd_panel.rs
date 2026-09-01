@@ -117,7 +117,7 @@ impl SteamCmdPanel {
                             break;
                         }
                         steamcmd::InstallEvent::Error(e) => {
-                            pending_logs.push(format!("✕ Ошибка установки: {e}"));
+                            pending_logs.push(format!("× Ошибка установки: {e}"));
                             next_state = Some(State::Idle);
                             break;
                         }
@@ -138,7 +138,7 @@ impl SteamCmdPanel {
                         }
                         steamcmd::DownloadEvent::ItemFailed(id) => {
                             failed.push(id);
-                            pending_logs.push(format!("✕ Ошибка: {id}"));
+                            pending_logs.push(format!("× Ошибка: {id}"));
                         }
                         steamcmd::DownloadEvent::Finished { failed: f } => {
                             let c = *completed;
@@ -402,7 +402,7 @@ impl SteamCmdPanel {
                 if *completed > 0 {
                     ui.add_space(4.0);
                     let add_btn = egui::Button::new(
-                        RichText::new("↺  Перенести в Mods и обновить список")
+                        RichText::new("⟳  Перенести в Mods и обновить список")
                             .color(theme::TEXT_PRIMARY)
                             .size(11.0),
                     )
@@ -487,7 +487,7 @@ pub fn parse_ids(input: &str) -> Vec<u64> {
 fn log_line_color(line: &str) -> Color32 {
     if line.starts_with("✓") {
         theme::ACTIVE_GREEN
-    } else if line.starts_with("✕") || line.contains("ERROR") || line.contains("FAILED") {
+    } else if line.starts_with("×") || line.contains("ERROR") || line.contains("FAILED") {
         theme::ERROR_RED
     } else if line.starts_with("⚠") || line.starts_with("→") || line.contains("Downloading") {
         theme::WARNING_AMBER

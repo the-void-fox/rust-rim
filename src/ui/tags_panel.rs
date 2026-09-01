@@ -39,7 +39,7 @@ pub fn show(ctx: &egui::Context, state: &mut TagsUi, tags: &mut Tags) -> bool {
     let mut ops: Vec<Op> = Vec::new();
     let mut open = true;
 
-    Window::new(RichText::new("🏷  Теги").color(theme::TEXT_PRIMARY).size(13.0).strong())
+    Window::new(RichText::new("⚑  Теги").color(theme::TEXT_PRIMARY).size(13.0).strong())
         .open(&mut open)
         .collapsible(false)
         .resizable(true)

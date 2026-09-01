@@ -84,7 +84,7 @@ fn header(ui: &mut egui::Ui, state: &mut ValidationUi) {
     let (errors, warnings) = (state.errors(), state.warnings());
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new(format!("✕ {errors}"))
+            RichText::new(format!("× {errors}"))
                 .color(if errors > 0 { theme::ERROR_RED } else { theme::TEXT_MUTED })
                 .size(12.0)
                 .strong(),
@@ -123,7 +123,7 @@ fn body(ui: &mut egui::Ui, state: &mut ValidationUi, db: &ModDb, reply: &mut Rep
         ui.add_space(20.0);
         ui.vertical_centered(|ui| {
             ui.label(
-                RichText::new("Проблем не найдено 🎉")
+                RichText::new("Проблем не найдено ★")
                     .color(theme::ACTIVE_GREEN)
                     .size(13.0),
             );
@@ -144,7 +144,7 @@ fn body(ui: &mut egui::Ui, state: &mut ValidationUi, db: &ModDb, reply: &mut Rep
 
 fn draw_diagnostic(ui: &mut egui::Ui, diag: &Diagnostic, db: &ModDb, reply: &mut Reply) {
     let (mark, color) = match diag.severity {
-        Severity::Error => ("✕", theme::ERROR_RED),
+        Severity::Error => ("×", theme::ERROR_RED),
         Severity::Warning => ("⚠", theme::WARNING_AMBER),
     };
 

@@ -655,7 +655,7 @@ impl RustRim {
                     if self.validation.was_checked() && (errors > 0 || warns > 0) {
                         ui.separator();
                         let color = if errors > 0 { theme::ERROR_RED } else { theme::WARNING_AMBER };
-                        let label = RichText::new(format!("Проверка: ✕ {errors}  ⚠ {warns}"))
+                        let label = RichText::new(format!("Проверка: × {errors}  ⚠ {warns}"))
                             .color(color)
                             .size(11.5);
                         if ui
