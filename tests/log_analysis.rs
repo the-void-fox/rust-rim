@@ -90,6 +90,36 @@ fn vanilla_mono_noise_is_not_an_error() {
 }
 
 #[test]
+fn localization_noise_is_ignored_together_with_its_stack() {
+    // Эти строки есть в каждом запуске с непустым языком: игра подставляет
+    // английский текст и работает дальше. Формы взяты из живых логов.
+    //
+    // Важна не только первая строка: у «Failed to resolve text» тянется
+    // трасса через GrammarResolver, и её нельзя оставлять — иначе запись
+    // всплывёт снова, уже без узнаваемого заголовка.
+    let log = "Translation data for language Russian / Русский has 25 errors. Generate translation report for more info.\n\
+               Failed to resolve text. Trying again with English. Exception: System.ArgumentNullException: Value cannot be null.\n\
+                 at Verse.Grammar.GrammarResolver.ResolveUnsafe (System.String rootKeyword) [0x00000] in <hash>:0 \n\
+                 at Verse.Grammar.GrammarResolver.Resolve (System.String rootKeyword) [0x0000e] in <hash>:0 \n\
+               Grammar unresolvable. Root 'r_name'\n\
+               Exception filling window for RimWorld.MainTabWindow_Inspect: System.NullReferenceException: boom\n";
+
+    let issues = parse_log(log);
+    assert_eq!(issues.len(), 1, "остаться должна только настоящая ошибка: {issues:#?}");
+    assert!(issues[0].title.contains("MainTabWindow_Inspect"), "{}", issues[0].title);
+}
+
+#[test]
+fn a_real_error_that_merely_mentions_translation_still_counts() {
+    // Фильтр смотрит на начало строки, а не на вхождение: исключение внутри
+    // мода-переводчика — настоящая ошибка, и прятать её нельзя.
+    let log = "Exception in TranslationWorker: System.NullReferenceException: boom\n";
+    let issues = parse_log(log);
+    assert_eq!(issues.len(), 1, "{issues:#?}");
+    assert_eq!(issues[0].severity, Severity::Error);
+}
+
+#[test]
 fn attributes_suspects() {
     let mods = vec![
         fake_mod("Vanilla Furniture Expanded", "vanillaexpanded.vfecore", "VFECore"),

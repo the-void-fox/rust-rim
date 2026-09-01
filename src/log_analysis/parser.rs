@@ -15,6 +15,30 @@ const BENIGN: &[&str] = &[
     "could not load signature of",
 ];
 
+/// Шум перевода. Он есть в каждом запуске с непустым языком и почти ни на что
+/// не влияет: игра подставляет английский текст и идёт дальше.
+///
+/// Первые три формы найдены в логах живой установки, остальные добавлены по
+/// той же части игры — если не встретятся, вреда от них нет.
+///
+/// Обратная сторона: мод, который ломает именно перевод, теперь не попадёт
+/// в отчёт. Это осознанный размен — иначе каждый прогон приходил с ошибкой,
+/// которую всё равно все игнорируют.
+const LOCALIZATION_NOISE: &[&str] = &[
+    "failed to resolve text",
+    "translation data for language",
+    "grammar unresolvable",
+    "could not find translation key",
+    "duplicate translation key",
+    "translation error",
+];
+
+/// Шум ли это — запись, которую в отчёт пускать не надо.
+fn is_noise(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    BENIGN.iter().chain(LOCALIZATION_NOISE).any(|n| lower.starts_with(n))
+}
+
 /// Определяет, начинается ли с этой строки запись об ошибке/предупреждении.
 /// Записи в Player.log не индентированы; кадры стека — индентированы.
 fn classify_start(line: &str) -> Option<Severity> {
@@ -22,10 +46,6 @@ fn classify_start(line: &str) -> Option<Severity> {
         return None;
     }
     let lower = line.to_lowercase();
-
-    if BENIGN.iter().any(|noise| lower.starts_with(noise)) {
-        return None;
-    }
 
     if lower.starts_with("warning") || lower.starts_with("[warning]") {
         return Some(Severity::Warning);
@@ -54,9 +74,14 @@ fn classify_start(line: &str) -> Option<Severity> {
 
 /// Неиндентированная строка вида "System.NullReferenceException: …" —
 /// RimWorld часто пишет сообщение и текст исключения двумя строками подряд.
+///
+/// Тип исключения — одно слово вплотную к двоеточию. Проверка именно такая,
+/// потому что «Exception filling window for RimWorld.MainTabWindow_Inspect: …»
+/// тоже начинается со слова Exception, но это самостоятельная запись, и
+/// прежняя проверка приклеивала её к предыдущей.
 fn looks_like_exception_line(line: &str) -> bool {
-    let Some(first) = line.split_whitespace().next() else { return false };
-    first.contains("Exception") && line.contains(':')
+    let Some(head) = line.split(':').next() else { return false };
+    !head.contains(char::is_whitespace) && head.ends_with("Exception") && line.contains(':')
 }
 
 /// Строка-продолжение записи (стек, вложенные исключения, XML-контекст).
@@ -84,6 +109,46 @@ fn normalize(s: &str) -> String {
     out
 }
 
+/// Собирает запись целиком: заголовок плюс строки-продолжения.
+/// Возвращает строки записи, кадры стека и индекс следующей строки лога.
+fn collect_entry(lines: &[&str], start: usize) -> (Vec<String>, Vec<String>, usize) {
+    let mut entry_lines: Vec<String> = vec![lines[start].trim_end().to_string()];
+    let mut frames: Vec<String> = Vec::new();
+    let mut j = start + 1;
+
+    while j < lines.len() && entry_lines.len() < MAX_ENTRY_LINES {
+        let line = lines[j];
+
+        // Терминатор Unity-записи
+        if line.trim_start().starts_with("(Filename:") {
+            j += 1;
+            break;
+        }
+        // Пустая строка заканчивает запись, если дальше не продолжение
+        if line.trim().is_empty() {
+            if j + 1 < lines.len() && is_continuation(lines[j + 1]) {
+                j += 1;
+                continue;
+            }
+            break;
+        }
+        if !is_continuation(line) {
+            break;
+        }
+
+        let trimmed = line.trim_start();
+        if let Some(frame) = trimmed.strip_prefix("at ") {
+            frames.push(frame.trim_end().to_string());
+        } else if trimmed.starts_with("(wrapper") {
+            frames.push(trimmed.trim_end().to_string());
+        }
+        entry_lines.push(line.trim_end().to_string());
+        j += 1;
+    }
+
+    (entry_lines, frames, j)
+}
+
 /// Разбирает текст лога на сгруппированные записи.
 pub fn parse_log(text: &str) -> Vec<LogIssue> {
     let lines: Vec<&str> = text.lines().collect();
@@ -92,46 +157,22 @@ pub fn parse_log(text: &str) -> Vec<LogIssue> {
 
     let mut i = 0;
     while i < lines.len() {
+        // Шум пропускается записью целиком, вместе со стеком: иначе строка
+        // вида «System.ArgumentNullException: …» из его трассы всплыла бы
+        // отдельной ошибкой уже без узнаваемого заголовка.
+        if is_noise(lines[i]) {
+            let (_, _, next) = collect_entry(&lines, i);
+            i = next.max(i + 1);
+            continue;
+        }
+
         let Some(severity) = classify_start(lines[i]) else {
             i += 1;
             continue;
         };
 
-        // Собираем запись: заголовок + продолжения
-        let title = lines[i].trim_end().to_string();
-        let mut entry_lines: Vec<String> = vec![title.clone()];
-        let mut frames: Vec<String> = Vec::new();
-        let mut j = i + 1;
-
-        while j < lines.len() && entry_lines.len() < MAX_ENTRY_LINES {
-            let line = lines[j];
-
-            // Терминатор Unity-записи
-            if line.trim_start().starts_with("(Filename:") {
-                j += 1;
-                break;
-            }
-            // Пустая строка заканчивает запись, если дальше не продолжение
-            if line.trim().is_empty() {
-                if j + 1 < lines.len() && is_continuation(lines[j + 1]) {
-                    j += 1;
-                    continue;
-                }
-                break;
-            }
-            if !is_continuation(line) {
-                break;
-            }
-
-            let trimmed = line.trim_start();
-            if let Some(frame) = trimmed.strip_prefix("at ") {
-                frames.push(frame.trim_end().to_string());
-            } else if trimmed.starts_with("(wrapper") {
-                frames.push(trimmed.trim_end().to_string());
-            }
-            entry_lines.push(line.trim_end().to_string());
-            j += 1;
-        }
+        let (entry_lines, frames, j) = collect_entry(&lines, i);
+        let title = entry_lines[0].clone();
 
         // Сигнатура: нормализованный заголовок + первый кадр стека
         let mut signature = normalize(&title);

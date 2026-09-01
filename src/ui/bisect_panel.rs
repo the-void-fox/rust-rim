@@ -201,32 +201,45 @@ fn result(ui: &mut egui::Ui, hunt: &Hunt, db: &ModDb, reply: &mut Reply) {
     }
     ui.add_space(6.0);
 
-    for id in &found {
-        Frame::new()
-            .fill(theme::BG_ROW_EVEN)
-            .stroke(Stroke::new(1.0, theme::ERROR_RED.gamma_multiply(0.4)))
-            .inner_margin(Margin::symmetric(8, 6))
-            .show(ui, |ui| {
-                ui.set_width(fit_width(ui));
-                ui.horizontal(|ui| {
-                    let name = db.get(id).map(|m| m.name.as_str()).unwrap_or(id.as_str());
-                    if ui
-                        .add(
-                            egui::Label::new(
-                                RichText::new(name).color(theme::TEXT_PRIMARY).size(11.5),
-                            )
-                            .truncate()
-                            .sense(egui::Sense::click()),
-                        )
-                        .on_hover_text(id.as_str())
-                        .clicked()
-                    {
-                        *reply = Reply::Select(id.clone());
-                    }
-                });
-            });
-        ui.add_space(3.0);
-    }
+    // Найденных может быть много — например, если поиск остановили рано.
+    // Без прокрутки список уезжал за нижний край окна вместе с кнопкой.
+    // Половина оставшейся высоты: вторая нужна кнопке и журналу прогонов.
+    let list_height = (ui.available_height() * 0.5).max(80.0);
+    ScrollArea::vertical()
+        .id_salt("bisect_result")
+        .max_height(list_height)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for id in &found {
+                Frame::new()
+                    .fill(theme::BG_ROW_EVEN)
+                    .stroke(Stroke::new(1.0, theme::ERROR_RED.gamma_multiply(0.4)))
+                    .inner_margin(Margin::symmetric(8, 6))
+                    .show(ui, |ui| {
+                        ui.set_width(fit_width(ui));
+                        ui.horizontal(|ui| {
+                            let name =
+                                db.get(id).map(|m| m.name.as_str()).unwrap_or(id.as_str());
+                            if ui
+                                .add(
+                                    egui::Label::new(
+                                        RichText::new(name)
+                                            .color(theme::TEXT_PRIMARY)
+                                            .size(11.5),
+                                    )
+                                    .truncate()
+                                    .sense(egui::Sense::click()),
+                                )
+                                .on_hover_text(id.as_str())
+                                .clicked()
+                            {
+                                *reply = Reply::Select(id.clone());
+                            }
+                        });
+                    });
+                ui.add_space(3.0);
+            }
+        });
 
     ui.add_space(4.0);
     if ui
