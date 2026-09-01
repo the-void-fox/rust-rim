@@ -11,6 +11,7 @@ use egui::{Color32, Frame, Margin, RichText, Stroke, Vec2};
 use crate::fs_util;
 use crate::game::{launch, paths, Prefix};
 use crate::process::Run;
+use crate::bisect::Hunt;
 use crate::testing::{self, Phase, TestRun};
 use crate::mod_data::{
     ModDb, ModId, ModSource, Profile,
@@ -25,6 +26,7 @@ use crate::ui::duplicates::DuplicatesUi;
 use crate::ui::list_cache::{ListCaches, SearchState};
 use crate::ui::tags_panel::TagsUi;
 use crate::ui::launch_panel;
+use crate::ui::bisect_panel::{self, BisectUi};
 use crate::ui::test_panel::{self, TestUi};
 use crate::ui::validation_panel::{self, ValidationUi};
 use crate::ui::log_panel::LogPanel;
@@ -111,6 +113,9 @@ pub struct RustRim {
     /// Автотест сборки через -quicktest.
     test_run: Option<TestRun>,
     test_ui: TestUi,
+    /// Поиск виновника: цепочка прогонов с урезанными сборками.
+    bisect: Option<Hunt>,
+    bisect_ui: BisectUi,
 
     /// Проверка сборки: диагностики и окно с ними.
     validation: ValidationUi,
@@ -159,6 +164,8 @@ impl RustRim {
             tags_ui: TagsUi::default(),
             test_run: None,
             test_ui: TestUi::default(),
+            bisect: None,
+            bisect_ui: BisectUi::default(),
             validation: ValidationUi::new(),
             game_version: None,
             detected_prefixes: Vec::new(),
@@ -602,6 +609,7 @@ impl eframe::App for RustRim {
         self.show_launch_window(&ctx);
         self.show_validation(&ctx);
         self.show_test(&ctx);
+        self.show_bisect(&ctx);
     }
 }
 
@@ -984,22 +992,30 @@ impl RustRim {
         }
     }
 
-    /// Запускает прогон сборки в игре.
+    /// Запускает прогон текущей сборки.
     fn start_test(&mut self) {
-        let prefix = self.effective_prefix();
-        let Some(prefix) = prefix else {
-            self.notice = Some((
-                "Не найден wine-префикс: укажите его в Настройки → Запуск.".to_string(),
-                true,
-            ));
-            return;
+        let active = self.profile.order().to_vec();
+        match self.build_test(&active) {
+            Ok(run) => {
+                self.test_run = Some(run);
+                self.test_ui.reset();
+            }
+            Err(e) => self.notice = Some((e, true)),
+        }
+    }
+
+    /// Готовит прогон произвольного набора модов.
+    ///
+    /// Общее для обычного теста и для поиска виновника: настройки, план
+    /// запуска и уборка процессов у них одни и те же, разный только состав.
+    fn build_test(&mut self, active: &[ModId]) -> Result<TestRun, String> {
+        let Some(prefix) = self.effective_prefix() else {
+            return Err("Не найден wine-префикс: укажите его в Настройки → Запуск.".to_string());
         };
         if self.settings.config_path.is_empty() {
-            self.notice = Some((
-                "Не задан путь к конфигу игры — прогону некуда положить сборку.".to_string(),
-                true,
-            ));
-            return;
+            return Err(
+                "Не задан путь к конфигу игры — прогону некуда положить сборку.".to_string()
+            );
         }
 
         let game = std::path::Path::new(&self.settings.game_path);
@@ -1014,26 +1030,15 @@ impl RustRim {
         let mut launch_settings = self.settings.launch.clone();
         launch_settings.prefix = prefix.to_string_lossy().into_owned();
         let mode = launch::Mode::QuickTest { log_file: log_file.clone() };
-        let plan = match launch::plan(game, &launch_settings, &mode) {
-            Ok(plan) => plan,
-            Err(e) => {
-                self.notice = Some((e.to_string(), true));
-                return;
-            }
-        };
+        let plan = launch::plan(game, &launch_settings, &mode).map_err(|e| e.to_string())?;
 
         let mut config = testing::Config::new(config_dir, log_file);
         if let Some(exe) = paths::find_executable(game) {
             config.cleanup = Some((prefix, exe.path().to_path_buf()));
         }
 
-        match TestRun::start(plan.to_command(), plan.display(), config, self.profile.order()) {
-            Ok(run) => {
-                self.test_run = Some(run);
-                self.test_ui.reset();
-            }
-            Err(e) => self.notice = Some((format!("Не удалось запустить прогон: {e}"), true)),
-        }
+        TestRun::start(plan.to_command(), plan.display(), config, active)
+            .map_err(|e| format!("Не удалось запустить прогон: {e}"))
     }
 
     fn effective_prefix(&mut self) -> Option<std::path::PathBuf> {
@@ -1069,9 +1074,57 @@ impl RustRim {
                 }
             }
             test_panel::Reply::Restart => self.start_test(),
+            test_panel::Reply::Bisect => self.start_bisect(),
             test_panel::Reply::Select(id) => {
                 if self.db.contains(&id) {
                     self.selected = Some(id);
+                }
+            }
+        }
+    }
+
+    /// Запускает поиск виновника по результатам последнего прогона.
+    fn start_bisect(&mut self) {
+        let issues = self.test_ui.issues().to_vec();
+        self.bisect = Some(Hunt::from_failed_run(&self.db, &self.profile, &issues));
+        self.bisect_ui.open = true;
+    }
+
+    fn show_bisect(&mut self, ctx: &egui::Context) {
+        // Поиск на время работы вынимается из self: чтобы запустить очередной
+        // прогон, ему нужен build_test, а тот забирает self целиком.
+        if let Some(mut hunt) = self.bisect.take() {
+            hunt.poll(&self.db, &self.profile);
+            if let Some(active) = hunt.wants_run() {
+                match self.build_test(&active) {
+                    Ok(run) => hunt.attach(run),
+                    Err(e) => {
+                        self.notice = Some((e, true));
+                        hunt.cancel();
+                    }
+                }
+            }
+            if !hunt.is_done() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            }
+            self.bisect = Some(hunt);
+        }
+
+        match bisect_panel::show(ctx, &mut self.bisect_ui, self.bisect.as_ref(), &self.db) {
+            bisect_panel::Reply::None => {}
+            bisect_panel::Reply::Cancel => {
+                if let Some(hunt) = &mut self.bisect {
+                    hunt.cancel();
+                }
+            }
+            bisect_panel::Reply::Select(id) => {
+                if self.db.contains(&id) {
+                    self.selected = Some(id);
+                }
+            }
+            bisect_panel::Reply::Deactivate(ids) => {
+                for id in ids {
+                    self.apply(Action::Deactivate(id));
                 }
             }
         }

@@ -1,3 +1,4 @@
+pub mod bisect_panel;
 pub mod details;
 pub mod dialogs;
 pub mod duplicates;

@@ -21,6 +21,8 @@ pub enum Reply {
     Cancel,
     /// Запустить заново.
     Restart,
+    /// Искать виновника, сужая сборку прогонами.
+    Bisect,
     /// Выделить мод в списке.
     Select(ModId),
 }
@@ -41,6 +43,10 @@ impl TestUi {
 
     pub fn issues_ready(&self) -> bool {
         self.issues_ready
+    }
+
+    pub fn issues(&self) -> &[LogIssue] {
+        &self.issues
     }
 }
 
@@ -134,7 +140,7 @@ fn status(ui: &mut egui::Ui, run: &TestRun, reply: &mut Reply) {
     });
 }
 
-fn phase_text(phase: &Phase) -> String {
+pub fn phase_text(phase: &Phase) -> String {
     match phase {
         // Первую минуту лога нет вообще — это норма, а не зависание.
         Phase::Starting => "Запуск: Proton поднимает окружение".to_string(),
@@ -150,7 +156,7 @@ fn phase_text(phase: &Phase) -> String {
     }
 }
 
-fn verdict_look(verdict: &Verdict) -> (&'static str, Color32) {
+pub fn verdict_look(verdict: &Verdict) -> (&'static str, Color32) {
     match verdict {
         Verdict::Passed => ("✓", theme::ACTIVE_GREEN),
         Verdict::LoadedWithErrors => ("⚠", theme::WARNING_AMBER),
@@ -161,7 +167,7 @@ fn verdict_look(verdict: &Verdict) -> (&'static str, Color32) {
     }
 }
 
-fn verdict_text(verdict: &Verdict) -> String {
+pub fn verdict_text(verdict: &Verdict) -> String {
     match verdict {
         Verdict::Passed => "Сборка загрузилась без ошибок".to_string(),
         Verdict::LoadedWithErrors => "Загрузилась, но в логе есть ошибки".to_string(),
@@ -248,11 +254,26 @@ fn done(ui: &mut egui::Ui, verdict: &Verdict, state: &TestUi, reply: &mut Reply)
         return;
     }
 
-    ui.label(
-        RichText::new(format!("Записей в логе: {}", state.issues.len()))
-            .color(theme::TEXT_MUTED)
-            .size(10.5),
-    );
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(format!("Записей в логе: {}", state.issues.len()))
+                .color(theme::TEXT_MUTED)
+                .size(10.5),
+        );
+        // Сужать сборку имеет смысл только после провала: у прогона без
+        // ошибок нечего воспроизводить.
+        if !matches!(verdict, Verdict::Passed | Verdict::Cancelled)
+            && ui
+                .button(RichText::new("⚖ Найти виновника").size(11.0))
+                .on_hover_text(
+                    "Запускать игру с урезанными сборками, пока не останется то, \
+                     без чего проблема пропадает. Каждый прогон — минуты.",
+                )
+                .clicked()
+        {
+            *reply = Reply::Bisect;
+        }
+    });
     ui.add_space(4.0);
 
     ScrollArea::vertical()

@@ -121,6 +121,8 @@ pub struct TestRun {
     config: Config,
     /// Восстанавливает ModsConfig.xml даже при панике.
     _guard: ConfigGuard,
+    /// Состав прогоняемой сборки.
+    active: Vec<ModId>,
     started: Instant,
     log_len: usize,
     last_growth: Instant,
@@ -151,6 +153,7 @@ impl TestRun {
             run,
             config,
             _guard: guard,
+            active: active.to_vec(),
             started: now,
             log_len: 0,
             last_growth: now,
@@ -162,6 +165,11 @@ impl TestRun {
 
     pub fn phase(&self) -> &Phase {
         &self.phase
+    }
+
+    /// Состав сборки, с которой идёт прогон.
+    pub fn active(&self) -> &[ModId] {
+        &self.active
     }
 
     pub fn elapsed(&self) -> Duration {
