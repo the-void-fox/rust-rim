@@ -34,7 +34,7 @@ use crate::ui::log_panel::LogPanel;
 use crate::ui::mod_list::ModList;
 use crate::ui::preview::Preview;
 use crate::ui::steamcmd_panel::SteamCmdPanel;
-use crate::ui::workshop_browser::WorkshopBrowser;
+use crate::ui::workshop::WorkshopBrowser;
 use crate::ui::{dialogs, duplicates, tags_panel, theme, toolbar, widgets};
 
 // ─── Payload для Drag & Drop ─────────────────────────────────────────────────

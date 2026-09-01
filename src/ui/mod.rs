@@ -16,6 +16,6 @@ pub mod updates_panel;
 pub mod toolbar;
 pub mod validation_panel;
 pub mod widgets;
-pub mod workshop_browser;
+pub mod workshop;
 
 pub use widgets::{fit_width, fit_width_minus};
