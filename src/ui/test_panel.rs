@@ -51,7 +51,7 @@ pub fn show(ctx: &egui::Context, state: &mut TestUi, run: Option<&TestRun>) -> R
     let mut reply = Reply::None;
     let mut open = true;
 
-    Window::new("🧪  Тест сборки")
+    Window::new("⚛  Тест сборки")
         .open(&mut open)
         .collapsible(true)
         .resizable(true)
@@ -117,7 +117,7 @@ fn status(ui: &mut egui::Ui, run: &TestRun, reply: &mut Reply) {
         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
             match run.phase() {
                 Phase::Done(_) => {
-                    if ui.button("↻ Повторить").clicked() {
+                    if ui.button("⟳ Повторить").clicked() {
                         *reply = Reply::Restart;
                     }
                 }
@@ -139,9 +139,12 @@ fn phase_text(phase: &Phase) -> String {
         // Первую минуту лога нет вообще — это норма, а не зависание.
         Phase::Starting => "Запуск: Proton поднимает окружение".to_string(),
         Phase::Loading { lines } => format!("Загрузка модов ({lines} строк лога)"),
+        // Маркер загрузки срабатывает на первой смене сцены, до карты, —
+        // поэтому «загрузилась», а не «карта готова».
         Phase::Settling { lines, quiet } => format!(
-            "Карта готова, ждём тишины {} с ({lines} строк)",
+            "Загрузилась, лог молчит {} с из {} ({lines} строк)",
             quiet.as_secs(),
+            crate::testing::DEFAULT_SETTLE.as_secs(),
         ),
         Phase::Done(_) => "Готово".to_string(),
     }
@@ -149,9 +152,10 @@ fn phase_text(phase: &Phase) -> String {
 
 fn verdict_look(verdict: &Verdict) -> (&'static str, Color32) {
     match verdict {
-        Verdict::Passed => ("✔", theme::ACTIVE_GREEN),
+        Verdict::Passed => ("✓", theme::ACTIVE_GREEN),
         Verdict::LoadedWithErrors => ("⚠", theme::WARNING_AMBER),
-        Verdict::Crashed { .. } | Verdict::DiedWhileLoading => ("✕", theme::ERROR_RED),
+        Verdict::ErrorStorm => ("⚑", theme::ERROR_RED),
+        Verdict::Crashed { .. } | Verdict::DiedWhileLoading => ("×", theme::ERROR_RED),
         Verdict::TimedOut => ("⏱", theme::WARNING_AMBER),
         Verdict::Cancelled => ("■", theme::TEXT_MUTED),
     }
@@ -161,6 +165,7 @@ fn verdict_text(verdict: &Verdict) -> String {
     match verdict {
         Verdict::Passed => "Сборка загрузилась без ошибок".to_string(),
         Verdict::LoadedWithErrors => "Загрузилась, но в логе есть ошибки".to_string(),
+        Verdict::ErrorStorm => "Ошибка повторяется без остановки".to_string(),
         Verdict::Crashed { code } => match code {
             Some(c) => format!("Игра завершилась, не начав загрузку (код {c})"),
             None => "Игра завершилась, не начав загрузку".to_string(),
@@ -170,6 +175,29 @@ fn verdict_text(verdict: &Verdict) -> String {
         }
         Verdict::TimedOut => "Не уложились в отведённое время".to_string(),
         Verdict::Cancelled => "Остановлено".to_string(),
+    }
+}
+
+/// Пояснение к вердиктам, которые сами по себе непонятны.
+fn explanation(verdict: &Verdict) -> Option<&'static str> {
+    match verdict {
+        Verdict::DiedWhileLoading => Some(
+            "Так бывает под umu: Prepatcher перезапускает игру, а контейнер \
+             к этому моменту уже свернулся. Попробуйте повторить прогон или \
+             выбрать другой способ запуска в настройках.",
+        ),
+        Verdict::ErrorStorm => Some(
+            "Игра дошла до карты, но роняет одно и то же исключение каждый кадр \
+             и пишет его в лог без остановки. Дожидаться тишины было бесполезно, \
+             поэтому прогон остановлен сразу. Смотрите первую же запись ниже — \
+             обычно виноват мод из её списка подозреваемых.",
+        ),
+        Verdict::TimedOut => Some(
+            "Лог не замолк и не дал повода вынести вердикт за отведённое время. \
+             Возможно, сборка очень большая — увеличьте предел или запустите \
+             игру вручную и посмотрите, на чём она стоит.",
+        ),
+        _ => None,
     }
 }
 
@@ -202,16 +230,8 @@ fn running(ui: &mut egui::Ui, run: &TestRun) {
 }
 
 fn done(ui: &mut egui::Ui, verdict: &Verdict, state: &TestUi, reply: &mut Reply) {
-    if matches!(verdict, Verdict::DiedWhileLoading) {
-        ui.label(
-            RichText::new(
-                "Так бывает под umu: Prepatcher перезапускает игру, а контейнер \
-                 к этому моменту уже свернулся. Попробуйте повторить прогон или \
-                 выбрать другой способ запуска в настройках.",
-            )
-            .color(theme::TEXT_MUTED)
-            .size(11.0),
-        );
+    if let Some(note) = explanation(verdict) {
+        ui.label(RichText::new(note).color(theme::TEXT_MUTED).size(11.0));
         ui.add_space(6.0);
     }
 

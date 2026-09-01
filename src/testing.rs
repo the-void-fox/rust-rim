@@ -7,7 +7,11 @@
 //! * Prepatcher перезапускает игру, и строка `RimWorld <версия>` встречается
 //!   в логе дважды — по одному вхождению судить нельзя;
 //! * `-quicktest` не выходит сам: игра генерирует карту и остаётся в ней.
-//!   Признак «загрузилось» — лог перестал расти, а процесс жив.
+//!   Признак «загрузилось» — лог перестал расти, а процесс жив;
+//! * тишины может не быть вовсе. Сломанный мод роняет исключение каждый кадр,
+//!   и лог растёт до самого конца отведённого времени — как раз в том случае,
+//!   ради которого прогон и затевался. Поэтому поток повторяющихся ошибок
+//!   распознаётся отдельно, а ожидание тишины ограничено сверху.
 //!
 //! Поэтому вердикт выносится по тишине в логе, а не по завершению процесса.
 
@@ -23,8 +27,25 @@ use crate::process::Run;
 
 /// Сколько лог должен молчать, чтобы считать загрузку завершённой.
 pub const DEFAULT_SETTLE: Duration = Duration::from_secs(25);
+/// Сколько всего ждать тишины после загрузки, прежде чем судить по тому,
+/// что уже написано. Без потолка сборка, которая пишет в лог без остановки,
+/// висела бы до самого таймаута.
+pub const DEFAULT_SETTLE_CAP: Duration = Duration::from_secs(120);
 /// Общий предел на прогон.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Как часто перечитывать лог. Опрос идёт из отрисовки, то есть до 60 раз в
+/// секунду, а лог к концу прогона — сотни килобайт.
+const POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+/// Этим RimWorld помечает повтор уже напечатанного исключения.
+///
+/// Отличный признак потока: в обычном Player.log таких строк ноль, а в
+/// прогоне со сломанным модом их было 650 на 2545 строк — исключение
+/// прилетало каждый кадр из `Update()` и из тика каждого джоба.
+const REPEAT_MARKER: &str = "Duplicate stacktrace, see ref for original";
+/// Столько повторов — это уже поток, а не хвост загрузки.
+const STORM_REPEATS: usize = 40;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -34,6 +55,8 @@ pub struct Config {
     /// работает в контейнере со своим `/tmp`.
     pub log_file: PathBuf,
     pub settle: Duration,
+    /// Потолок ожидания тишины, отсчитывается от конца загрузки.
+    pub settle_cap: Duration,
     pub timeout: Duration,
     /// Чем добивать цепочку wine/Proton: (префикс, путь к exe).
     /// Без этого игра переживает снятие процесса-обёртки.
@@ -46,6 +69,7 @@ impl Config {
             config_dir,
             log_file,
             settle: DEFAULT_SETTLE,
+            settle_cap: DEFAULT_SETTLE_CAP,
             timeout: DEFAULT_TIMEOUT,
             cleanup: None,
         }
@@ -70,6 +94,9 @@ pub enum Verdict {
     Passed,
     /// Игра загрузилась, но в логе есть ошибки.
     LoadedWithErrors,
+    /// Одна и та же ошибка повторяется без остановки: игра работает, но
+    /// сыплет исключениями каждый кадр. Прогон прерван, ждать нечего.
+    ErrorStorm,
     /// Игра завершилась сама, даже не начав загружаться.
     Crashed { code: Option<i32> },
     /// Процессы игры исчезли посреди загрузки модов — до карты не дошло.
@@ -97,6 +124,9 @@ pub struct TestRun {
     started: Instant,
     log_len: usize,
     last_growth: Instant,
+    /// Когда лог впервые сообщил, что загрузка позади.
+    loaded_at: Option<Instant>,
+    last_poll: Option<Instant>,
     phase: Phase,
 }
 
@@ -124,6 +154,8 @@ impl TestRun {
             started: now,
             log_len: 0,
             last_growth: now,
+            loaded_at: None,
+            last_poll: None,
             phase: Phase::Starting,
         })
     }
@@ -150,6 +182,10 @@ impl TestRun {
         if matches!(self.phase, Phase::Done(_)) {
             return &self.phase;
         }
+        if self.last_poll.is_some_and(|t| t.elapsed() < POLL_INTERVAL) {
+            return &self.phase;
+        }
+        self.last_poll = Some(Instant::now());
         self.run.poll();
 
         let text = self.log_text();
@@ -158,6 +194,15 @@ impl TestRun {
             self.log_len = text.len();
             self.last_growth = Instant::now();
         }
+        let stage = progress(&text);
+
+        // Поток повторяющихся исключений: тишины не будет никогда, ждать её
+        // бессмысленно. Ответ у нас уже есть — сборка неиграбельна.
+        if stage != Progress::NotStarted && text.matches(REPEAT_MARKER).count() >= STORM_REPEATS {
+            self.stop_game();
+            self.phase = Phase::Done(Verdict::ErrorStorm);
+            return &self.phase;
+        }
 
         // Завершение обёртки ещё ничего не значит: umu-run выходит с кодом 0,
         // пока игра стартует дальше (Prepatcher перезапускает её отдельным
@@ -165,7 +210,7 @@ impl TestRun {
         // запуска, — и только это считаем концом.
         if !self.run.is_running() && !self.game_alive() {
             let code = self.run.status().and_then(|s| s.code());
-            self.phase = Phase::Done(match progress(&text) {
+            self.phase = Phase::Done(match stage {
                 Progress::Loaded => verdict_from_log(&text),
                 Progress::Started => Verdict::DiedWhileLoading,
                 Progress::NotStarted => Verdict::Crashed { code },
@@ -182,12 +227,18 @@ impl TestRun {
         let quiet = self.last_growth.elapsed();
         // Тишина засчитывается только после завершения загрузки: иначе
         // пауза посреди разбора модов сошла бы за успех.
-        self.phase = match progress(&text) {
-            Progress::Loaded if quiet >= self.config.settle => {
-                self.stop_game();
-                Phase::Done(verdict_from_log(&text))
+        self.phase = match stage {
+            Progress::Loaded => {
+                let waiting = self.loaded_at.get_or_insert_with(Instant::now).elapsed();
+                // Потолок нужен и без повторов: мод может писать в лог по
+                // таймеру, и тогда «тихих» окон не будет вообще.
+                if quiet >= self.config.settle || waiting >= self.config.settle_cap {
+                    self.stop_game();
+                    Phase::Done(verdict_from_log(&text))
+                } else {
+                    Phase::Settling { lines, quiet }
+                }
             }
-            Progress::Loaded => Phase::Settling { lines, quiet },
             Progress::NotStarted if lines == 0 => Phase::Starting,
             _ => Phase::Loading { lines },
         };
@@ -500,6 +551,49 @@ mod tests {
             progress("RimWorld 1.6.4633\nUnloading 99 unused Assets to reduce memory usage.\n"),
             Progress::Loaded,
         );
+    }
+
+    #[test]
+    fn endless_repeats_end_the_run_instead_of_waiting_for_silence() {
+        // Живой случай: игра дошла до карты и роняет исключение каждый кадр.
+        // Тишины не будет никогда, а ответ уже известен.
+        let t = Temp::new("storm");
+        let log = t.0.join("game.log");
+        let mut cfg = Config::new(t.0.clone(), log.clone());
+        cfg.settle = Duration::from_secs(30);
+        cfg.settle_cap = Duration::from_secs(30);
+
+        let cmd = fake_game(
+            &log,
+            "printf 'RimWorld 1.6\\nUnloading 99 unused Assets to reduce memory usage.\\n' > '{log}'; \
+             i=0; while [ $i -lt 60 ]; do \
+             printf 'System.NullReferenceException: boom\\n[Ref ABC] Duplicate stacktrace, see ref for original\\n' >> '{log}'; \
+             i=$((i+1)); done; sleep 30",
+        );
+        let mut run = TestRun::start(cmd, "fake".into(), cfg, &ids(&["a.mod"])).unwrap();
+
+        assert_eq!(drive(&mut run, Duration::from_secs(10)), Verdict::ErrorStorm);
+    }
+
+    #[test]
+    fn a_log_that_never_goes_quiet_still_gets_a_verdict() {
+        // Мод пишет в лог по таймеру: повторов нет, но и тишины тоже.
+        // Без потолка прогон висел бы до самого таймаута.
+        let t = Temp::new("chatty");
+        let log = t.0.join("game.log");
+        let mut cfg = Config::new(t.0.clone(), log.clone());
+        cfg.settle = Duration::from_secs(30);
+        cfg.settle_cap = Duration::from_millis(800);
+
+        let cmd = fake_game(
+            &log,
+            "printf 'RimWorld 1.6\\nUnloading 99 unused Assets to reduce memory usage.\\n' > '{log}'; \
+             i=0; while true; do printf 'chatty mod tick %s\\n' \"$i\" >> '{log}'; \
+             i=$((i+1)); sleep 0.1; done",
+        );
+        let mut run = TestRun::start(cmd, "fake".into(), cfg, &ids(&["a.mod"])).unwrap();
+
+        assert_eq!(drive(&mut run, Duration::from_secs(10)), Verdict::Passed);
     }
 
     #[test]
