@@ -17,6 +17,7 @@ use crate::mod_data::{
 use crate::settings::AppSettings;
 use crate::sorting::CommunityRules;
 use crate::steam::steamcmd;
+use crate::baseline::Baseline;
 use crate::tags::{TagId, Tags};
 use crate::ui::details::DetailsView;
 use crate::ui::duplicates::DuplicatesUi;
@@ -122,6 +123,8 @@ pub struct RustRim {
     /// Сборка в том виде, в каком она лежит в ModsConfig.xml: с ней сравниваем,
     /// чтобы показать «есть несохранённые изменения».
     saved: Vec<ModId>,
+    /// Рабочая сборка: от неё отсчитывается плашка «новый».
+    baseline: Baseline,
 
     steamcmd_panel: SteamCmdPanel,
     workshop_browser: WorkshopBrowser,
@@ -162,6 +165,7 @@ impl RustRim {
             game_version: None,
             notice: None,
             saved: Vec::new(),
+            baseline: Baseline::load(),
             steamcmd_panel: SteamCmdPanel::new(),
             workshop_browser: WorkshopBrowser::new(),
             log_panel: LogPanel::new(),
@@ -171,6 +175,11 @@ impl RustRim {
         };
         if has_paths {
             app.load_mods();
+            // Отправная точка для плашки «новый»: без неё плашек не было бы
+            // вовсе, пока пользователь не найдёт кнопку в меню.
+            if !app.baseline.is_set() && !app.profile.is_empty() {
+                app.mark_working();
+            }
         }
         app
     }
@@ -570,6 +579,7 @@ impl RustRim {
         let state = toolbar::ToolbarState {
             unsaved: self.profile.order() != self.saved.as_slice(),
             can_hunt: self.session.can_hunt(),
+            new_count: self.baseline.new_among(self.profile.order()).len(),
         };
         let resp = egui::Panel::top("toolbar_panel")
             .frame(Frame::NONE.fill(theme::BG_HEADER).inner_margin(Margin::symmetric(8, 6)))
@@ -593,12 +603,15 @@ impl RustRim {
         if resp.check_clicked     { self.revalidate(); self.validation.open = true; }
         if resp.test_clicked      { self.start_test(); }
         if resp.hunt_clicked      { self.session.start_hunt(&self.db, &self.profile); }
+        if resp.mark_working      { self.mark_working(); }
+        if resp.disable_new       { self.disable_new(); }
     }
 
     fn show_status_bar(&mut self, ui: &mut egui::Ui) {
         let active = self.profile.len();
         let total = self.db.len();
         let warnings = self.count_warnings();
+        let new_count = self.baseline.new_among(self.profile.order()).len();
 
         egui::Panel::bottom("status_bar")
             .frame(Frame::NONE.fill(theme::BG_HEADER).inner_margin(Margin::symmetric(10, 4)))
@@ -609,6 +622,15 @@ impl RustRim {
                             .color(theme::TEXT_MUTED)
                             .size(11.5),
                     );
+                    if new_count > 0 {
+                        ui.separator();
+                        ui.label(
+                            RichText::new(format!("новых: {new_count}"))
+                                .color(theme::TEXT_ACCENT)
+                                .size(11.5),
+                        )
+                        .on_hover_text("Включены после рабочей сборки. Сломалось — «Сборка → Выключить новые»");
+                    }
                     if warnings > 0 {
                         ui.separator();
                         ui.label(
@@ -747,6 +769,7 @@ impl RustRim {
                     &self.db, ids, &self.caches.warn, &self.tags,
                     &mut self.selected, is_active,
                 )
+                .with_baseline(&self.baseline)
                 .show(ui);
             });
         action
@@ -978,12 +1001,32 @@ impl RustRim {
             }
             game_session::Reply::Failed(e) => self.notice = Some((e, true)),
         }
+        // Тест прошёл — значит, эта сборка рабочая. Отметка сама, чтобы
+        // «новые» отсчитывались от последнего, что точно работало.
+        if let Some(passed) = self.session.take_passed() {
+            self.baseline.remember(&passed);
+            self.baseline.save();
+        }
     }
 
     fn launch_game(&mut self) {
         if let Err(e) = self.session.launch(&self.settings) {
             self.notice = Some((e, true));
         }
+    }
+
+    fn mark_working(&mut self) {
+        self.baseline.remember(self.profile.order());
+        self.baseline.save();
+    }
+
+    /// Откат к рабочей сборке: выключает всё, что включено после неё.
+    fn disable_new(&mut self) {
+        let fresh: Vec<ModId> = self.baseline.new_among(self.profile.order()).into_iter().cloned().collect();
+        for id in &fresh {
+            self.profile.deactivate(id);
+        }
+        self.after_profile_change();
     }
 
     fn start_test(&mut self) {

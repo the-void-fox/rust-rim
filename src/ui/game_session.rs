@@ -42,6 +42,8 @@ pub struct GameSession {
     /// Прогон сборки через -quicktest.
     run: Option<TestRun>,
     test_ui: TestUi,
+    /// Сборка, с которой запущен этот прогон; забирается при успехе.
+    tested: Option<Vec<ModId>>,
 
     /// Поиск виновника: цепочка прогонов с урезанными сборками.
     hunt: Option<Hunt>,
@@ -96,8 +98,20 @@ impl GameSession {
     pub fn start_test(&mut self, settings: &AppSettings, active: &[ModId]) -> Result<(), String> {
         let run = self.build_run(settings, active)?;
         self.run = Some(run);
+        self.tested = Some(active.to_vec());
         self.test_ui.reset();
         Ok(())
+    }
+
+    /// Сборка, на которой тест только что прошёл. Отдаётся один раз: по ней
+    /// приложение запоминает рабочую сборку.
+    pub fn take_passed(&mut self) -> Option<Vec<ModId>> {
+        use crate::testing::{Phase, Verdict};
+        let passed = self
+            .run
+            .as_ref()
+            .is_some_and(|run| matches!(run.phase(), Phase::Done(Verdict::Passed)));
+        if passed { self.tested.take() } else { None }
     }
 
     /// Провалился ли последний тест — только тогда есть что сужать.

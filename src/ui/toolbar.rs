@@ -13,6 +13,8 @@ pub struct ToolbarResponse {
     pub check_clicked: bool,
     pub test_clicked: bool,
     pub hunt_clicked: bool,
+    pub mark_working: bool,
+    pub disable_new: bool,
     pub settings_clicked: bool,
     pub activate_all: bool,
     pub deactivate_all: bool,
@@ -31,6 +33,8 @@ pub struct ToolbarState {
     pub unsaved: bool,
     /// Последний тест провалился — есть что сужать поиском виновника.
     pub can_hunt: bool,
+    /// Сколько активных модов включено после рабочей сборки.
+    pub new_count: usize,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -41,6 +45,8 @@ enum Btn {
     Check,
     Test,
     Hunt,
+    MarkWorking,
+    DisableNew,
     Workshop,
     SteamCmd,
     Logs,
@@ -83,6 +89,12 @@ const GROUPS: &[Group] = &[
             "Запустить игру с этой сборкой и разобрать лог. Занимает минуты")),
         Some((Btn::Hunt, "⚖  Найти виновника",
             "Запускать игру с урезанными сборками, пока не найдётся мод, который всё ломает")),
+        None,
+        Some((Btn::MarkWorking, "★  Запомнить как рабочую",
+            "Отметить текущую сборку как рабочую. Всё, что включишь потом, будет помечено «новый». \
+             После успешного теста игры отметка ставится сама")),
+        Some((Btn::DisableNew, "×  Выключить новые",
+            "Выключить моды, включённые после рабочей сборки — быстрый откат к тому, что работало")),
     ]},
     Group { icon: "⎘", label: "Списки", items: &[
         Some((Btn::SaveList, "⎘  Сохранить список…",
@@ -222,11 +234,17 @@ fn draw_left_group(ui: &mut Ui, resp: &mut ToolbarResponse, state: ToolbarState,
                     ui.separator();
                     continue;
                 };
-                let enabled = btn != Btn::Hunt || state.can_hunt;
-                let tip = if enabled {
-                    tip
-                } else {
-                    "Сначала «Тест игры»: искать виновника есть смысл, когда тест провалился"
+                let (enabled, why_not) = match btn {
+                    Btn::Hunt => (state.can_hunt,
+                        "Сначала «Тест игры»: искать виновника есть смысл, когда тест провалился"),
+                    Btn::DisableNew => (state.new_count > 0,
+                        "Новых модов нет: всё активное входит в рабочую сборку"),
+                    _ => (true, ""),
+                };
+                let tip = if enabled { tip } else { why_not };
+                let label = match btn {
+                    Btn::DisableNew if state.new_count > 0 => format!("{label} ({})", state.new_count),
+                    _ => label.to_string(),
                 };
                 let r = ui.add_enabled(enabled, Button::new(RichText::new(label).size(BTN_TEXT)));
                 let r = if enabled { r.on_hover_text(tip) } else { r.on_disabled_hover_text(tip) };
@@ -257,6 +275,8 @@ fn mark(resp: &mut ToolbarResponse, btn: Btn) {
         Btn::Check         => resp.check_clicked = true,
         Btn::Test          => resp.test_clicked = true,
         Btn::Hunt          => resp.hunt_clicked = true,
+        Btn::MarkWorking   => resp.mark_working = true,
+        Btn::DisableNew    => resp.disable_new = true,
         Btn::Workshop      => resp.workshop_clicked = true,
         Btn::SteamCmd      => resp.steamcmd_clicked = true,
         Btn::Logs          => resp.logs_clicked = true,

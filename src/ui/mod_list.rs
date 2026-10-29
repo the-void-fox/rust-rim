@@ -8,6 +8,7 @@ use egui::{
 use crate::app::{Action, DragPayload};
 use crate::ui::list_cache::RowWarn;
 use crate::mod_data::{ModDb, ModId, ModSource};
+use crate::baseline::Baseline;
 use crate::tags::Tags;
 use crate::ui::details::{source_color, source_label};
 use crate::ui::theme;
@@ -19,6 +20,8 @@ const COL_TAG:     f32 = 4.0;
 const COL_ICON:    f32 = 18.0;
 const COL_VERSION: f32 = 60.0;
 const COL_WARN:    f32 = 20.0;
+/// Плашка «НОВЫЙ» у модов, включённых после рабочей сборки.
+const NEW_BADGE_W: f32 = 40.0;
 /// Зона у верхнего/нижнего края списка, в которой при перетаскивании
 /// включается автопрокрутка.
 const DRAG_SCROLL_ZONE:  f32 = 28.0;
@@ -37,6 +40,7 @@ pub struct ModList<'a> {
     tags:      &'a Tags,
     selected:  &'a mut Option<ModId>,
     is_active: bool,
+    baseline:  Option<&'a Baseline>,
 }
 
 impl<'a> ModList<'a> {
@@ -48,7 +52,13 @@ impl<'a> ModList<'a> {
         selected:  &'a mut Option<ModId>,
         is_active: bool,
     ) -> Self {
-        Self { db, ids, warn, tags, selected, is_active }
+        Self { db, ids, warn, tags, selected, is_active, baseline: None }
+    }
+
+    /// Помечать «новый» активные моды, включённые после рабочей сборки.
+    pub fn with_baseline(mut self, baseline: &'a Baseline) -> Self {
+        self.baseline = Some(baseline);
+        self
     }
 
     pub fn show(self, ui: &mut Ui) -> Option<Action> {
@@ -183,7 +193,12 @@ impl<'a> ModList<'a> {
                         Pos2::new(warn_rect.left() - COL_VERSION, rect.top()),
                         Vec2::new(COL_VERSION, ROW_HEIGHT));
                     let name_left  = icon_rect.right() + 4.0;
-                    let name_width = (ver_rect.left() - 4.0 - name_left).max(10.0);
+                    let is_new = self.is_active && self.baseline.is_some_and(|b| b.is_new(id));
+                    let badge_w = if is_new { NEW_BADGE_W + 4.0 } else { 0.0 };
+                    let name_width = (ver_rect.left() - 4.0 - badge_w - name_left).max(10.0);
+                    let badge_rect = Rect::from_min_size(
+                        Pos2::new(ver_rect.left() - badge_w, rect.center().y - 7.0),
+                        Vec2::new(NEW_BADGE_W, 14.0));
 
                     // Иконка источника
                     let (src_char, src_col) = match &m.source {
@@ -218,6 +233,14 @@ impl<'a> ModList<'a> {
                         rect.center().y - galley.size().y * 0.5,
                     );
                     ui.painter().galley(name_pos, galley, name_color);
+
+                    if is_new {
+                        ui.painter().rect_filled(badge_rect, 3.0, theme::TEXT_ACCENT.gamma_multiply(0.25));
+                        ui.painter().text(
+                            badge_rect.center(), Align2::CENTER_CENTER,
+                            "НОВЫЙ", FontId::proportional(8.5), theme::TEXT_ACCENT,
+                        );
+                    }
 
                     // Версия
                     let ver = if !m.version.is_empty() {
@@ -278,6 +301,8 @@ impl<'a> ModList<'a> {
                     let resp = if let Some(p) = resp.hover_pos() {
                         if icon_rect.contains(p) {
                             resp.on_hover_text(source_label(&m.source))
+                        } else if is_new && badge_rect.contains(p) {
+                            resp.on_hover_text("Включён после рабочей сборки")
                         } else if warn_rect.contains(p) {
                             if let Some((_, _, tip)) = warn_text {
                                 resp.on_hover_text(tip)
