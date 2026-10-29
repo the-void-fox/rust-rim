@@ -100,6 +100,15 @@ impl GameSession {
         Ok(())
     }
 
+    /// Провалился ли последний тест — только тогда есть что сужать.
+    pub fn can_hunt(&self) -> bool {
+        use crate::testing::{Phase, Verdict};
+        self.hunt.as_ref().is_none_or(|h| h.is_done())
+            && self.run.as_ref().is_some_and(|run| {
+                matches!(run.phase(), Phase::Done(v) if !matches!(v, Verdict::Passed | Verdict::Cancelled))
+            })
+    }
+
     /// Запускает поиск виновника по разбору последнего прогона.
     pub fn start_hunt(&mut self, db: &ModDb, profile: &Profile) {
         let issues = self.test_ui.issues().to_vec();

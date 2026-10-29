@@ -119,6 +119,9 @@ pub struct RustRim {
 
     /// Короткое сообщение пользователю: (текст, это ошибка).
     notice: Option<(String, bool)>,
+    /// Сборка в том виде, в каком она лежит в ModsConfig.xml: с ней сравниваем,
+    /// чтобы показать «есть несохранённые изменения».
+    saved: Vec<ModId>,
 
     steamcmd_panel: SteamCmdPanel,
     workshop_browser: WorkshopBrowser,
@@ -158,6 +161,7 @@ impl RustRim {
             validation: ValidationUi::new(),
             game_version: None,
             notice: None,
+            saved: Vec::new(),
             steamcmd_panel: SteamCmdPanel::new(),
             workshop_browser: WorkshopBrowser::new(),
             log_panel: LogPanel::new(),
@@ -254,7 +258,10 @@ impl RustRim {
             return self.activate_core_only();
         }
         match parse_mods_config(&xml) {
-            Ok(ids) => self.apply_raw_ids(&ids),
+            Ok(ids) => {
+                self.apply_raw_ids(&ids);
+                self.saved = self.profile.order().to_vec();
+            }
             Err(e) => {
                 tracing::warn!("Failed to read ModsConfig.xml: {}", e);
                 self.activate_core_only();
@@ -458,8 +465,16 @@ impl RustRim {
         let xml = std::path::Path::new(&self.settings.config_path).join("ModsConfig.xml");
         let ids = self.active_ids_for_export();
         match write_mods_config(&xml, &ids) {
-            Ok(()) => tracing::info!("Saved {} active mods to {:?}", ids.len(), xml),
-            Err(e) => tracing::error!("Failed to write ModsConfig.xml: {}", e),
+            Ok(()) => {
+                tracing::info!("Saved {} active mods to {:?}", ids.len(), xml);
+                self.saved = self.profile.order().to_vec();
+            }
+            Err(e) => {
+                tracing::error!("Failed to write ModsConfig.xml: {}", e);
+                // Раньше ошибка уходила только в лог, и пользователь думал,
+                // что сборка сохранена.
+                self.notice = Some((format!("Не удалось записать ModsConfig.xml:\n{e:#}"), true));
+            }
         }
     }
 
@@ -552,9 +567,13 @@ impl eframe::App for RustRim {
 
 impl RustRim {
     fn show_toolbar(&mut self, ui: &mut egui::Ui) {
+        let state = toolbar::ToolbarState {
+            unsaved: self.profile.order() != self.saved.as_slice(),
+            can_hunt: self.session.can_hunt(),
+        };
         let resp = egui::Panel::top("toolbar_panel")
             .frame(Frame::NONE.fill(theme::BG_HEADER).inner_margin(Margin::symmetric(8, 6)))
-            .show(ui, toolbar::show_toolbar)
+            .show(ui, |ui| toolbar::show_toolbar(ui, state))
             .inner;
 
         if resp.save_clicked      { self.windows.save = true; }
@@ -573,6 +592,7 @@ impl RustRim {
         if resp.play_clicked      { self.launch_game(); }
         if resp.check_clicked     { self.revalidate(); self.validation.open = true; }
         if resp.test_clicked      { self.start_test(); }
+        if resp.hunt_clicked      { self.session.start_hunt(&self.db, &self.profile); }
     }
 
     fn show_status_bar(&mut self, ui: &mut egui::Ui) {

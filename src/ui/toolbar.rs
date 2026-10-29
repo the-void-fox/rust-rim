@@ -12,6 +12,7 @@ pub struct ToolbarResponse {
     pub sort_clicked: bool,
     pub check_clicked: bool,
     pub test_clicked: bool,
+    pub hunt_clicked: bool,
     pub settings_clicked: bool,
     pub activate_all: bool,
     pub deactivate_all: bool,
@@ -23,15 +24,23 @@ pub struct ToolbarResponse {
     pub tags_clicked: bool,
 }
 
+/// Что панели нужно знать о состоянии приложения.
+#[derive(Default, Clone, Copy)]
+pub struct ToolbarState {
+    /// Сборка отличается от записанной в ModsConfig.xml.
+    pub unsaved: bool,
+    /// Последний тест провалился — есть что сужать поиском виновника.
+    pub can_hunt: bool,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Btn {
-    Play,
-    Save,
     Reload,
     Updates,
     Sort,
     Check,
     Test,
+    Hunt,
     Workshop,
     SteamCmd,
     Logs,
@@ -42,63 +51,58 @@ enum Btn {
     DeactivateAll,
 }
 
-struct Spec {
-    btn: Btn,
+/// Пункт выпадающей группы. `None` — разделитель.
+type Item = Option<(Btn, &'static str, &'static str)>;
+
+struct Group {
     icon: &'static str,
     label: &'static str,
-    tip: &'static str,
-    color: fn() -> Color32,
-    accent: fn() -> Color32,
+    items: &'static [Item],
 }
 
-/// Кнопки в порядке убывания важности: при нехватке ширины хвост списка
-/// первым уезжает в меню «⋯».
-const SPECS: &[Spec] = &[
-    Spec { btn: Btn::Play, icon: "▶", label: "Запустить",
-        tip: "Запустить RimWorld с текущей сборкой модов",
-        color: || theme::ACTIVE_GREEN, accent: || theme::ACTIVE_GREEN },
-    Spec { btn: Btn::Save, icon: "⇩", label: "Сохранить",
-        tip: "Сохранить ModsConfig.xml",
-        color: || theme::TEXT_PRIMARY, accent: || theme::BORDER },
-    Spec { btn: Btn::Reload, icon: "⟳", label: "Обновить",
-        tip: "Перечитать папки модов с диска (F5). Порядок загрузки сохраняется",
-        color: || theme::TEXT_PRIMARY, accent: || theme::BORDER },
-    Spec { btn: Btn::Updates, icon: "⇧", label: "Обновления",
-        tip: "Проверить, для каких модов в мастерской есть версия новее",
-        color: || theme::SOURCE_WORKSHOP, accent: || theme::SOURCE_WORKSHOP },
-    Spec { btn: Btn::Sort, icon: "⇅", label: "Сортировать",
-        tip: "Автоматически отсортировать активные моды",
-        color: || theme::TEXT_PRIMARY, accent: || theme::BORDER },
-    Spec { btn: Btn::Check, icon: "✓", label: "Проверить",
-        tip: "Статическая проверка сборки: зависимости, конфликты, порядок загрузки",
-        color: || theme::TEXT_PRIMARY, accent: || theme::BORDER },
-    Spec { btn: Btn::Test, icon: "⚛", label: "Тест",
-        tip: "Прогнать сборку через -quicktest и разобрать лог игры",
-        color: || theme::ACTIVE_GREEN, accent: || theme::ACTIVE_GREEN },
-    Spec { btn: Btn::Workshop, icon: "⚒", label: "Workshop",
-        tip: "Просмотр и поиск модов в Steam Workshop",
-        color: || theme::SOURCE_WORKSHOP, accent: || theme::SOURCE_WORKSHOP },
-    Spec { btn: Btn::SteamCmd, icon: "⬇", label: "SteamCMD",
-        tip: "Скачать моды из Steam Workshop через SteamCMD",
-        color: || theme::SOURCE_WORKSHOP, accent: || theme::SOURCE_WORKSHOP },
-    Spec { btn: Btn::Logs, icon: "☰", label: "Логи",
-        tip: "Анализ Player.log: ошибки и предполагаемые моды-виновники",
-        color: || theme::WARNING_AMBER, accent: || theme::WARNING_AMBER },
-    Spec { btn: Btn::Tags, icon: "⚑", label: "Теги",
-        tip: "Управление тегами модов. Фильтр в поиске: tag:имя",
-        color: || theme::TEXT_ACCENT, accent: || theme::BORDER_ACCENT },
-    Spec { btn: Btn::SaveList, icon: "⎘", label: "Сохранить список",
-        tip: "Экспортировать список активных модов в файл (совместимо с RimSort)",
-        color: || theme::TEXT_ACCENT, accent: || theme::BORDER_ACCENT },
-    Spec { btn: Btn::LoadList, icon: "⎆", label: "Загрузить список",
-        tip: "Импортировать список модов из файла (ModsConfig.xml, .rml, .rws)",
-        color: || theme::TEXT_ACCENT, accent: || theme::BORDER_ACCENT },
-    Spec { btn: Btn::ActivateAll, icon: "▶▶", label: "Все активны",
-        tip: "Активировать все моды",
-        color: || theme::ACTIVE_GREEN, accent: || theme::ACTIVE_GREEN },
-    Spec { btn: Btn::DeactivateAll, icon: "◀◀", label: "Все неактивны",
-        tip: "Деактивировать все (кроме Core)",
-        color: || theme::ERROR_RED, accent: || theme::ERROR_RED },
+// Раньше здесь была плоская строка из пятнадцати равноправных кнопок: частое
+// («Запустить») стояло вперемешку с редким («Все неактивны»), а при узком
+// окне хвост уезжал в «⋯». Теперь на виду два главных действия, остальное
+// разложено по группам по смыслу.
+const GROUPS: &[Group] = &[
+    Group { icon: "▤", label: "Моды", items: &[
+        Some((Btn::Reload, "⟳  Перечитать с диска (F5)",
+            "Перечитать папки модов. Порядок загрузки сохраняется")),
+        Some((Btn::Updates, "⇧  Проверить обновления",
+            "Для каких модов в мастерской есть версия новее")),
+        Some((Btn::Workshop, "⚒  Мастерская Steam",
+            "Найти и скачать моды и сборки из Steam Workshop")),
+    ]},
+    Group { icon: "⇅", label: "Сборка", items: &[
+        Some((Btn::Sort, "⇅  Сортировать",
+            "Расставить активные моды в правильном порядке загрузки")),
+        Some((Btn::Check, "✓  Проверить сборку",
+            "Без запуска игры: недостающие зависимости, конфликты, порядок, версия игры")),
+        None,
+        Some((Btn::Test, "⚛  Тест игры",
+            "Запустить игру с этой сборкой и разобрать лог. Занимает минуты")),
+        Some((Btn::Hunt, "⚖  Найти виновника",
+            "Запускать игру с урезанными сборками, пока не найдётся мод, который всё ломает")),
+    ]},
+    Group { icon: "⎘", label: "Списки", items: &[
+        Some((Btn::SaveList, "⎘  Сохранить список…",
+            "Записать активные моды в файл (совместимо с RimSort)")),
+        Some((Btn::LoadList, "⎆  Загрузить список…",
+            "Заменить сборку списком из файла: ModsConfig.xml, .rml или сохранение .rws")),
+        None,
+        Some((Btn::ActivateAll, "▶▶  Включить все",
+            "Сделать активными все установленные моды")),
+        Some((Btn::DeactivateAll, "◀◀  Выключить все",
+            "Оставить активным только Core")),
+    ]},
+    Group { icon: "☰", label: "Инструменты", items: &[
+        Some((Btn::Logs, "☰  Анализ логов",
+            "Разобрать Player.log: ошибки и моды, которые их вызвали")),
+        Some((Btn::Tags, "⚑  Теги",
+            "Свои метки и цвета для модов")),
+        Some((Btn::SteamCmd, "⬇  SteamCMD",
+            "Скачать моды из мастерской по ID без клиента Steam")),
+    ]},
 ];
 
 const LEGEND: &[(&str, &str, fn() -> Color32)] = &[
@@ -111,17 +115,13 @@ const LEGEND: &[(&str, &str, fn() -> Color32)] = &[
 const BTN_TEXT: f32 = 12.0;
 const LEGEND_TEXT: f32 = 10.5;
 /// Ниже этой ширины окна легенда источников не показывается.
-const LEGEND_MIN_WIDTH: f32 = 900.0;
+const LEGEND_MIN_WIDTH: f32 = 1000.0;
 
 /// Отрисовывает панель инструментов и возвращает информацию о нажатых кнопках.
 ///
-/// Раскладка адаптивная: панель не может «наехать» сама на себя, потому что
-/// ширина правой группы (легенда и шестерёнка) резервируется до отрисовки
-/// левой. Раньше обе группы жили в одном `horizontal`, egui не резервировал
-/// место под правую, и при узком окне кнопки накладывались друг на друга.
-///
-/// Порядок сжатия: подписи → иконки → меню «⋯».
-pub fn show_toolbar(ui: &mut Ui) -> ToolbarResponse {
+/// Ширина правой группы (легенда и шестерёнка) резервируется до отрисовки
+/// левой — иначе при узком окне кнопки наезжают друг на друга.
+pub fn show_toolbar(ui: &mut Ui, state: ToolbarState) -> ToolbarResponse {
     let mut resp = ToolbarResponse::default();
 
     ui.horizontal(|ui| {
@@ -135,7 +135,7 @@ pub fn show_toolbar(ui: &mut Ui) -> ToolbarResponse {
         ui.allocate_ui_with_layout(
             Vec2::new(left_w, row_h),
             Layout::left_to_right(Align::Center),
-            |ui| draw_left_group(ui, &mut resp, left_w),
+            |ui| draw_left_group(ui, &mut resp, state, left_w),
         );
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -165,80 +165,98 @@ pub fn show_toolbar(ui: &mut Ui) -> ToolbarResponse {
     resp
 }
 
-fn draw_left_group(ui: &mut Ui, resp: &mut ToolbarResponse, available: f32) {
-    ui.label(RichText::new("RUSTRIM").color(theme::TEXT_ACCENT).size(13.0).strong());
-    ui.add_space(8.0);
+fn draw_left_group(ui: &mut Ui, resp: &mut ToolbarResponse, state: ToolbarState, available: f32) {
+    // Подписи групп убираются первыми, потом подписи главных кнопок:
+    // иконки с выпадающими меню остаются доступны при любой ширине.
+    let save_mark = if state.unsaved { " •" } else { "" };
+    let play_full = "▶ Запустить".to_string();
+    let save_full = format!("⇩ Сохранить{save_mark}");
+    let groups_full: f32 = GROUPS.iter().map(|g| button_width(ui, &group_text(g, true))).sum();
+    let groups_icons: f32 = GROUPS.iter().map(|g| button_width(ui, &group_text(g, false))).sum();
+    let main_full = button_width(ui, &play_full) + button_width(ui, &save_full);
+    let brand = text_width(ui, "RUSTRIM", 13.0) + 16.0;
 
-    let mut budget = available - text_width(ui, "RUSTRIM", 13.0) - 16.0;
+    let show_brand = brand + main_full + groups_full + 16.0 <= available;
+    let group_labels = main_full + groups_full + 16.0 <= available;
+    let main_labels = main_full + groups_icons + 16.0 <= available;
 
-    // Помещаются ли все кнопки с подписями?
-    let full: f32 = SPECS.iter().map(|s| button_width(ui, &full_text(s))).sum();
-    if full <= budget {
-        for spec in SPECS {
-            draw_button(ui, resp, spec, &full_text(spec));
-        }
-        return;
+    if show_brand {
+        ui.label(RichText::new("RUSTRIM").color(theme::TEXT_ACCENT).size(13.0).strong());
+        ui.add_space(8.0);
     }
 
-    // Иначе — иконки; сколько влезет, остальное в меню «⋯».
-    let icon_widths: Vec<f32> = SPECS.iter().map(|s| button_width(ui, s.icon)).collect();
-    let all_icons: f32 = icon_widths.iter().sum();
-
-    let visible = if all_icons <= budget {
-        SPECS.len()
+    let (play, save) = if main_labels {
+        (play_full, save_full)
     } else {
-        budget -= button_width(ui, "⋯");
-        let mut n = 0;
-        for w in &icon_widths {
-            if budget - w < 0.0 {
-                break;
-            }
-            budget -= w;
-            n += 1;
-        }
-        n
+        ("▶".to_string(), format!("⇩{save_mark}"))
     };
-
-    for spec in &SPECS[..visible] {
-        draw_button(ui, resp, spec, spec.icon);
+    let play_btn = Button::new(RichText::new(play).color(theme::BG_DARK).size(BTN_TEXT).strong())
+        .fill(theme::ACTIVE_GREEN);
+    if ui.add(play_btn).on_hover_text("Запустить RimWorld с текущей сборкой").clicked() {
+        resp.play_clicked = true;
+    }
+    let save_color = if state.unsaved { theme::WARNING_AMBER } else { theme::TEXT_PRIMARY };
+    let save_tip = if state.unsaved {
+        "Есть несохранённые изменения: игра их не увидит, пока сборка не записана в ModsConfig.xml"
+    } else {
+        "Записать сборку в ModsConfig.xml — игра загрузит именно её"
+    };
+    let save_btn = Button::new(RichText::new(save).color(save_color).size(BTN_TEXT))
+        .fill(theme::BG_ROW_EVEN)
+        .stroke(egui::Stroke::new(1.0, save_color.gamma_multiply(0.5)));
+    if ui.add(save_btn).on_hover_text(save_tip).clicked() {
+        resp.save_clicked = true;
     }
 
-    if visible < SPECS.len() {
-        ui.menu_button("⋯", |ui| {
-            ui.set_min_width(200.0);
-            for spec in &SPECS[visible..] {
-                if ui.add(styled(spec, &full_text(spec))).on_hover_text(spec.tip).clicked() {
-                    mark(resp, spec.btn);
+    ui.add_space(4.0);
+    ui.separator();
+
+    for group in GROUPS {
+        let text = RichText::new(group_text(group, group_labels))
+            .color(theme::TEXT_PRIMARY)
+            .size(BTN_TEXT);
+        ui.menu_button(text, |ui| {
+            ui.set_min_width(220.0);
+            for item in group.items {
+                let Some((btn, label, tip)) = *item else {
+                    ui.separator();
+                    continue;
+                };
+                let enabled = btn != Btn::Hunt || state.can_hunt;
+                let tip = if enabled {
+                    tip
+                } else {
+                    "Сначала «Тест игры»: искать виновника есть смысл, когда тест провалился"
+                };
+                let r = ui.add_enabled(enabled, Button::new(RichText::new(label).size(BTN_TEXT)));
+                let r = if enabled { r.on_hover_text(tip) } else { r.on_disabled_hover_text(tip) };
+                if r.clicked() {
+                    mark(resp, btn);
                     ui.close();
                 }
             }
         })
         .response
-        .on_hover_text("Ещё действия");
+        .on_hover_text(group.label);
     }
 }
 
-fn draw_button(ui: &mut Ui, resp: &mut ToolbarResponse, spec: &Spec, text: &str) {
-    if ui.add(styled(spec, text)).on_hover_text(spec.tip).clicked() {
-        mark(resp, spec.btn);
+fn group_text(group: &Group, with_label: bool) -> String {
+    if with_label {
+        format!("{} {} ⏷", group.icon, group.label)
+    } else {
+        format!("{} ⏷", group.icon)
     }
-}
-
-fn styled(spec: &Spec, text: &str) -> Button<'static> {
-    Button::new(RichText::new(text.to_owned()).color((spec.color)()).size(BTN_TEXT))
-        .fill(theme::BG_ROW_EVEN)
-        .stroke(egui::Stroke::new(1.0, (spec.accent)().gamma_multiply(0.4)))
 }
 
 fn mark(resp: &mut ToolbarResponse, btn: Btn) {
     match btn {
-        Btn::Play          => resp.play_clicked = true,
-        Btn::Save          => resp.save_clicked = true,
         Btn::Reload        => resp.reload_clicked = true,
         Btn::Updates       => resp.updates_clicked = true,
         Btn::Sort          => resp.sort_clicked = true,
         Btn::Check         => resp.check_clicked = true,
         Btn::Test          => resp.test_clicked = true,
+        Btn::Hunt          => resp.hunt_clicked = true,
         Btn::Workshop      => resp.workshop_clicked = true,
         Btn::SteamCmd      => resp.steamcmd_clicked = true,
         Btn::Logs          => resp.logs_clicked = true,
@@ -248,10 +266,6 @@ fn mark(resp: &mut ToolbarResponse, btn: Btn) {
         Btn::ActivateAll   => resp.activate_all = true,
         Btn::DeactivateAll => resp.deactivate_all = true,
     }
-}
-
-fn full_text(spec: &Spec) -> String {
-    format!("{} {}", spec.icon, spec.label)
 }
 
 fn text_width(ui: &Ui, text: &str, size: f32) -> f32 {

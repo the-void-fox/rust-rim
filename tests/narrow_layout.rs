@@ -89,7 +89,7 @@ impl Fixture {
             egui::Panel::top("toolbar_panel")
                 .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(8, 6)))
                 .show(root, |ui| {
-                    toolbar::show_toolbar(ui);
+                    toolbar::show_toolbar(ui, Default::default());
                 });
 
             egui::Panel::bottom("status_bar").show(root, |ui| {
