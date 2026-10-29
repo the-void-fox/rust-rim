@@ -380,6 +380,23 @@ impl SteamCmdPanel {
             }
         });
 
+        // Неудавшиеся — обратно в поле ввода, чтобы повторить одной кнопкой
+        // и не выискивать их ID в логе.
+        let mut keep_failed = None;
+        if let State::Done { failed, .. } = &self.state
+            && !failed.is_empty()
+            && ui
+                .small_button("Оставить в списке только неудавшиеся")
+                .on_hover_text("Заменить список ID теми, что не скачались, — для повторной попытки")
+                .clicked()
+        {
+            keep_failed = Some(failed.clone());
+        }
+        if let Some(failed) = keep_failed {
+            self.ids_input.clear();
+            self.add_ids(&failed);
+        }
+
         // Авто-перенос: при включённой настройке срабатывает сразу после завершения
         let trigger_auto = if let State::Done { completed, rescan_triggered, .. } = &mut self.state {
             if *completed > 0 && auto_move && !*rescan_triggered {

@@ -233,11 +233,7 @@ pub fn download_mods_multi_async(
         let worker_tx = inner_tx.clone();
         let base_clone = base.clone();
         std::thread::spawn(move || {
-            if let Err(e) = run_download(&worker_base, &chunk, validate, &worker_tx) {
-                let _ = worker_tx.send(DownloadEvent::Log(format!("Критическая ошибка: {e}")));
-                let _ = worker_tx.send(DownloadEvent::Finished { failed: chunk });
-                return;
-            }
+            let failed = download_with_retry(&worker_base, &chunk, validate, &worker_tx);
             // Переносим скачанный контент в канонический путь {base}/steam/
             let src = steam_content_path(&worker_base);
             let dst = steam_content_path(&base_clone);
@@ -249,6 +245,7 @@ pub fn download_mods_multi_async(
                 }
                 let _ = std::fs::remove_dir_all(worker_base);
             }
+            let _ = worker_tx.send(DownloadEvent::Finished { failed });
         });
     }
     drop(inner_tx); // канал закроется когда все воркеры завершатся
@@ -279,33 +276,15 @@ pub fn download_mods_multi_async(
     });
 }
 
-/// Перемещает содержимое папки `src` в `dst` (рекурсивно по модам верхнего уровня).
+/// Перемещает содержимое папки `src` в `dst` (по модам верхнего уровня).
+///
+/// Уже лежащая в `dst` версия заменяется: раньше она оставалась, а только
+/// что скачанное обновление удалялось вместе с папкой воркера.
 fn move_dir_contents(src: &Path, dst: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
-        let target = dst.join(entry.file_name());
-        if !target.exists() {
-            std::fs::rename(entry.path(), &target).or_else(|_| {
-                // rename не работает между разными точками монтирования — копируем и удаляем
-                copy_dir_all(&entry.path(), &target)
-                    .and_then(|_| std::fs::remove_dir_all(entry.path()).map_err(Into::into))
-            })?;
-        }
-    }
-    Ok(())
-}
-
-fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let target = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir_all(&entry.path(), &target)?;
-        } else {
-            std::fs::copy(entry.path(), target)?;
-        }
+        crate::fs_util::replace_dir(&entry.path(), &dst.join(entry.file_name()))?;
     }
     Ok(())
 }
@@ -317,19 +296,55 @@ pub fn download_mods_async(
     tx: mpsc::Sender<DownloadEvent>,
 ) {
     std::thread::spawn(move || {
-        if let Err(e) = run_download(&base, &ids, validate, &tx) {
-            let _ = tx.send(DownloadEvent::Log(format!("Критическая ошибка: {e}")));
-            let _ = tx.send(DownloadEvent::Finished { failed: ids });
-        }
+        let failed = download_with_retry(&base, &ids, validate, &tx);
+        let _ = tx.send(DownloadEvent::Finished { failed });
     });
 }
 
+/// Скачивает моды и один раз повторяет неудавшиеся.
+///
+/// SteamCMD временами отказывается качать мод, а со второй попытки берёт его
+/// без вопросов — главная жалоба пользователей RimSort. Повтор идёт с
+/// `validate`: он же чинит недокачанные в первый раз файлы.
+/// Возвращает моды, которые не скачались и после повтора.
+fn download_with_retry(
+    base: &Path,
+    ids: &[u64],
+    validate: bool,
+    tx: &mpsc::Sender<DownloadEvent>,
+) -> Vec<u64> {
+    let failed = match run_download(base, ids, validate, tx) {
+        Ok(failed) => failed,
+        Err(e) => {
+            // SteamCMD не запустился — повтор ничего не изменит.
+            let _ = tx.send(DownloadEvent::Log(format!("Критическая ошибка: {e}")));
+            return ids.to_vec();
+        }
+    };
+    if failed.is_empty() {
+        return failed;
+    }
+    let _ = tx.send(DownloadEvent::Log(format!(
+        "⟳ Повтор для {} мод(ов) с проверкой файлов…",
+        failed.len()
+    )));
+    match run_download(base, &failed, true, tx) {
+        Ok(still) => still,
+        Err(e) => {
+            let _ = tx.send(DownloadEvent::Log(format!("Критическая ошибка: {e}")));
+            failed
+        }
+    }
+}
+
+/// Один запуск SteamCMD. Возвращает моды, скачивание которых SteamCMD
+/// не подтвердил.
 fn run_download(
     base: &Path,
     ids: &[u64],
     validate: bool,
     tx: &mpsc::Sender<DownloadEvent>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<u64>> {
     // На NixOS используем системный steamcmd из nixpkgs (уже пропатчен).
     let (exe, is_system) = if is_nixos() {
         match find_system_steamcmd() {
@@ -408,7 +423,7 @@ fn run_download(
     let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("stdout не настроен"))?;
     let mut reader = std::io::BufReader::new(stdout);
 
-    let mut failed: Vec<u64> = Vec::new();
+    let mut succeeded: std::collections::HashSet<u64> = std::collections::HashSet::new();
 
     drain_output(&mut reader, |raw_line| {
         // SteamCMD иногда объединяет несколько событий через ANSI-коды — разбиваем дополнительно.
@@ -420,32 +435,27 @@ fn run_download(
                 let _ = tx.send(DownloadEvent::ItemStarted(id));
             }
             if let Some(id) = parse_success_id(&part) {
+                succeeded.insert(id);
                 let _ = tx.send(DownloadEvent::ItemDone(id));
             }
             if let Some(id) = parse_error_id(&part) {
-                if !failed.contains(&id) {
-                    failed.push(id);
-                }
                 let _ = tx.send(DownloadEvent::ItemFailed(id));
             }
         }
     });
 
     let status = child.wait()?;
-
-    // Ненулевой код выхода — считаем все моды неудачными (напр. steamcmd не запустился).
-    if !status.success() && failed.is_empty() {
+    if !status.success() {
         let _ = tx.send(DownloadEvent::Log(format!(
             "× SteamCMD завершился с ошибкой (код {})",
             status.code().unwrap_or(-1)
         )));
-        let all_ids: Vec<u64> = ids.to_vec();
-        let _ = tx.send(DownloadEvent::Finished { failed: all_ids });
-        return Ok(());
     }
 
-    let _ = tx.send(DownloadEvent::Finished { failed });
-    Ok(())
+    // Неудача — всё, что SteamCMD не подтвердил, а не только явные ERROR!:
+    // если процесс умер посреди пачки, остаток иначе молча пропадал.
+    let failed: Vec<u64> = ids.iter().copied().filter(|id| !succeeded.contains(id)).collect();
+    Ok(failed)
 }
 
 // ─── NixOS / steam-run ────────────────────────────────────────────────────────
