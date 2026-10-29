@@ -5,6 +5,8 @@ use egui::{Align2, RichText, ScrollArea, Window};
 
 use crate::mod_data::ModDb;
 use crate::ui::theme;
+use crate::i18n::tr;
+use crate::trf;
 
 /// Состояние диалогов дубликатов.
 #[derive(Default)]
@@ -32,14 +34,14 @@ fn show_list(ctx: &egui::Context, state: &mut DuplicatesUi, db: &ModDb) {
     let mut open = true;
     let count = db.duplicates().len();
 
-    Window::new("Обнаружены дубликаты модов")
+    Window::new(tr("Обнаружены дубликаты модов"))
         .collapsible(false)
         .resizable(false)
         .open(&mut open)
         .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
             ui.label(
-                RichText::new(format!("Найдено {count} мод(ов) с дублирующимися package ID:"))
+                RichText::new(trf!("Найдено {count} мод(ов) с дублирующимися package ID:", count))
                     .color(theme::WARNING_AMBER),
             );
             ui.add_space(6.0);
@@ -58,16 +60,12 @@ fn show_list(ctx: &egui::Context, state: &mut DuplicatesUi, db: &ModDb) {
                                 .color(theme::TEXT_ACCENT)
                                 .size(11.0),
                         )
-                        .on_hover_text(format!(
-                            "оставлен:\n{}\n\nбудут удалены:\n{}",
-                            group.kept.display(),
-                            group
+                        .on_hover_text(trf!("оставлен:\n{display}\n\nбудут удалены:\n{removed}", display = group.kept.display(), removed = group
                                 .discarded
                                 .iter()
                                 .map(|p| p.display().to_string())
                                 .collect::<Vec<_>>()
-                                .join("\n"),
-                        ));
+                                .join("\n")));
                     });
                 }
             });
@@ -75,12 +73,12 @@ fn show_list(ctx: &egui::Context, state: &mut DuplicatesUi, db: &ModDb) {
             ui.separator();
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.button("Удалить дубликаты (оставить первый)").clicked() {
+                if ui.button(tr("Удалить дубликаты (оставить первый)")).clicked() {
                     state.show_list = false;
                     state.confirm = true;
                 }
                 ui.add_space(8.0);
-                if ui.button("Закрыть").clicked() {
+                if ui.button(tr("Закрыть")).clicked() {
                     state.show_list = false;
                 }
             });
@@ -95,16 +93,13 @@ fn show_notification(ctx: &egui::Context, state: &mut DuplicatesUi) {
     if state.last_removed == 0 {
         return;
     }
-    Window::new("Готово")
+    Window::new(tr("Готово"))
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
             ui.label(
-                RichText::new(format!(
-                    "Удалено {} дублирующихся мод(ов).",
-                    state.last_removed
-                ))
+                RichText::new(trf!("Удалено {last_removed} дублирующихся мод(ов).", last_removed = state.last_removed))
                 .color(theme::ACTIVE_GREEN),
             );
             ui.add_space(6.0);
@@ -120,21 +115,21 @@ fn show_confirmation(ctx: &egui::Context, state: &mut DuplicatesUi) -> bool {
     }
     let mut confirmed = false;
 
-    Window::new("Подтверждение удаления")
+    Window::new(tr("Подтверждение удаления"))
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
-            ui.label(RichText::new("ВНИМАНИЕ!").color(theme::ERROR_RED).strong());
-            ui.label("Вы собираетесь безвозвратно удалить папки дублирующихся модов с диска.");
-            ui.label("Отменить это действие будет невозможно.");
+            ui.label(RichText::new(tr("ВНИМАНИЕ!")).color(theme::ERROR_RED).strong());
+            ui.label(tr("Вы собираетесь безвозвратно удалить папки дублирующихся модов с диска."));
+            ui.label(tr("Отменить это действие будет невозможно."));
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.button("Да, удалить").clicked() {
+                if ui.button(tr("Да, удалить")).clicked() {
                     state.confirm = false;
                     confirmed = true;
                 }
-                if ui.button("Отмена").clicked() {
+                if ui.button(tr("Отмена")).clicked() {
                     state.confirm = false;
                 }
             });

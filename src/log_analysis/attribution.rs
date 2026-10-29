@@ -3,6 +3,7 @@ use std::path::Path;
 
 use crate::mod_data::{ModDb, ModEntry, ModId, Profile};
 use super::{LogIssue, Suspect};
+use crate::trf;
 
 // Веса сигналов
 const SCORE_PATH:      i32 = 5;
@@ -168,7 +169,7 @@ pub fn attribute(issue: &mut LogIssue, index: &ModIndex) {
         }
         if let Some(&i) = index.dll.get(&two).or_else(|| index.dll.get(&root)) {
             let short: String = path.chars().take(80).collect();
-            add(i, SCORE_NAMESPACE, format!("стек: {short}"));
+            add(i, SCORE_NAMESPACE, trf!("стек: {short}", short));
         }
     }
 
@@ -179,7 +180,7 @@ pub fn attribute(issue: &mut LogIssue, index: &ModIndex) {
         for marker in ["mods/", "mods\\", "294100/", "294100\\"] {
             if let Some(seg) = path_segment_after(&lower, marker) {
                 if let Some(&i) = index.folder.get(seg) {
-                    add(i, SCORE_PATH, format!("путь: …{marker}{seg}/…"));
+                    add(i, SCORE_PATH, trf!("путь: …{marker}{seg}/…", marker, seg));
                 }
             }
         }
@@ -191,7 +192,7 @@ pub fn attribute(issue: &mut LogIssue, index: &ModIndex) {
         }
         for (name, i) in &index.names {
             if line.contains(name.as_str()) {
-                add(*i, SCORE_NAME, format!("упомянуто название «{name}»"));
+                add(*i, SCORE_NAME, trf!("упомянуто название «{name}»", name));
             }
         }
     }

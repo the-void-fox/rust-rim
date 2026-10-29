@@ -8,7 +8,7 @@
 //! Тест берёт все не-ASCII символы из исходников и спрашивает у настоящего
 //! набора шрифтов, есть ли для каждого глиф. Комментарии проверяются заодно:
 //! одиночный символ в комментарии обычно и есть тот, который потом попадёт
-//! в интерфейс.
+//! в интерфейс. Файлы переводов из `locales/` проверяются так же.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -21,7 +21,18 @@ fn every_character_in_the_sources_has_a_glyph() {
     let mut fonts = Fonts::new(TextOptions::default(), rust_rim::ui::fonts::definitions());
 
     let mut missing: BTreeMap<char, Vec<String>> = BTreeMap::new();
-    for file in rust_files(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src")) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // Переводы рисуются тем же набором шрифтов, что и исходники.
+    let mut files = rust_files(&root.join("src"));
+    files.extend(
+        std::fs::read_dir(root.join("locales"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "json")),
+    );
+    for file in files {
         let text = std::fs::read_to_string(&file).expect("исходник читается");
         let name = file
             .file_name()

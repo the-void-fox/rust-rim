@@ -17,6 +17,8 @@ use crate::testing::{self, Phase, TestRun};
 use crate::ui::bisect_panel::{self, BisectUi};
 use crate::ui::launch_panel;
 use crate::ui::test_panel::{self, TestUi};
+use crate::i18n::tr;
+use crate::trf;
 
 /// О чём сессия просит приложение.
 pub enum Reply {
@@ -89,7 +91,7 @@ impl GameSession {
                 self.game_window = true;
                 Ok(())
             }
-            Err(e) => Err(format!("Не удалось запустить: {e}\n\n{command}")),
+            Err(e) => Err(trf!("Не удалось запустить: {e}\n\n{command}", e, command)),
         }
     }
 
@@ -136,11 +138,11 @@ impl GameSession {
     /// запуска и уборка процессов у них одни и те же, разный только состав.
     fn build_run(&mut self, settings: &AppSettings, active: &[ModId]) -> Result<TestRun, String> {
         let Some(prefix) = self.prefix(settings) else {
-            return Err("Не найден wine-префикс: укажите его в Настройки → Запуск.".to_string());
+            return Err(tr("Не найден wine-префикс: укажите его в Настройки → Запуск.").to_string());
         };
         if settings.config_path.is_empty() {
             return Err(
-                "Не задан путь к конфигу игры — прогону некуда положить сборку.".to_string()
+                tr("Не задан путь к конфигу игры — прогону некуда положить сборку.").to_string()
             );
         }
 
@@ -164,7 +166,7 @@ impl GameSession {
         }
 
         TestRun::start(plan.to_command(), plan.display(), config, active)
-            .map_err(|e| format!("Не удалось запустить прогон: {e}"))
+            .map_err(|e| trf!("Не удалось запустить прогон: {e}", e))
     }
 
     /// Префикс из настроек, иначе первый найденный.

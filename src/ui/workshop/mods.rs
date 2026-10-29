@@ -9,6 +9,7 @@ use crate::ui::{fit_width_minus, theme};
 
 use super::browse::{self, Browse, Card};
 use super::queue::Queue;
+use crate::i18n::tr;
 
 pub fn show(
     ui: &mut egui::Ui,
@@ -22,7 +23,7 @@ pub fn show(
     if browse::search_bar(
         ui,
         browse_state,
-        "Поиск модов RimWorld...",
+        tr("Поиск модов RimWorld..."),
         "wsbrowser",
         false,
     ) {
@@ -43,7 +44,7 @@ pub fn show(
         height,
         status,
         items.len(),
-        "Нажмите ⊙ для просмотра популярных модов",
+        tr("Нажмите ⊙ для просмотра популярных модов"),
         |ui, i| card(ui, &items[i], browse_state, queue, installed),
     );
 }
@@ -83,18 +84,18 @@ fn card(
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if is_installed {
                     ui.label(
-                        RichText::new("✓ Установлено").color(theme::ACTIVE_GREEN).size(11.0),
+                        RichText::new(tr("✓ Установлено")).color(theme::ACTIVE_GREEN).size(11.0),
                     );
                 } else if in_queue {
                     let btn = egui::Button::new(
-                        RichText::new("✓ В очереди").color(theme::ACTIVE_GREEN).size(11.0),
+                        RichText::new(tr("✓ В очереди")).color(theme::ACTIVE_GREEN).size(11.0),
                     )
                     .fill(theme::BG_DARK)
                     .stroke(Stroke::new(1.0, theme::ACTIVE_GREEN));
-                    toggle = ui.add(btn).on_hover_text("Убрать из очереди").clicked();
+                    toggle = ui.add(btn).on_hover_text(tr("Убрать из очереди")).clicked();
                 } else {
                     let btn = egui::Button::new(
-                        RichText::new("+ Добавить").color(theme::TEXT_PRIMARY).size(11.0),
+                        RichText::new(tr("+ Добавить")).color(theme::TEXT_PRIMARY).size(11.0),
                     )
                     .fill(theme::HEADER_LEFT)
                     .stroke(Stroke::new(1.0, theme::BORDER_ACCENT));

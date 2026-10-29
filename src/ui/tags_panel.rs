@@ -6,6 +6,8 @@ use egui::{Align2, Frame, RichText, Stroke, Window};
 
 use crate::tags::{Rgb, TagId, Tags};
 use crate::ui::theme;
+use crate::i18n::tr;
+use crate::trf;
 
 #[derive(Default)]
 pub struct TagsUi {
@@ -39,7 +41,7 @@ pub fn show(ctx: &egui::Context, state: &mut TagsUi, tags: &mut Tags) -> bool {
     let mut ops: Vec<Op> = Vec::new();
     let mut open = true;
 
-    Window::new(RichText::new("⚑  Теги").color(theme::TEXT_PRIMARY).size(13.0).strong())
+    Window::new(RichText::new(tr("⚑  Теги")).color(theme::TEXT_PRIMARY).size(13.0).strong())
         .open(&mut open)
         .collapsible(false)
         .resizable(true)
@@ -63,7 +65,7 @@ pub fn show(ctx: &egui::Context, state: &mut TagsUi, tags: &mut Tags) -> bool {
 
 fn body(ui: &mut egui::Ui, state: &mut TagsUi, tags: &Tags, ops: &mut Vec<Op>) {
     ui.label(
-        RichText::new("Теги помечают моды цветом в списке. Фильтр в поиске: tag:имя")
+        RichText::new(tr("Теги помечают моды цветом в списке. Фильтр в поиске: tag:имя"))
             .color(theme::TEXT_MUTED)
             .size(10.5)
             .italics(),
@@ -72,7 +74,7 @@ fn body(ui: &mut egui::Ui, state: &mut TagsUi, tags: &Tags, ops: &mut Vec<Op>) {
 
     if tags.is_empty() {
         ui.label(
-            RichText::new("Тегов пока нет — создайте первый ниже.")
+            RichText::new(tr("Тегов пока нет — создайте первый ниже."))
                 .color(theme::TEXT_MUTED)
                 .size(11.5),
         );
@@ -110,7 +112,7 @@ fn body(ui: &mut egui::Ui, state: &mut TagsUi, tags: &Tags, ops: &mut Vec<Op>) {
 
                     let used = tags.usage(id);
                     ui.label(
-                        RichText::new(format!("{used} мод(ов)"))
+                        RichText::new(trf!("{used} мод(ов)", used))
                             .color(theme::TEXT_MUTED)
                             .size(10.5),
                     );
@@ -118,7 +120,7 @@ fn body(ui: &mut egui::Ui, state: &mut TagsUi, tags: &Tags, ops: &mut Vec<Op>) {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .small_button(RichText::new("🗑").color(theme::ERROR_RED))
-                            .on_hover_text("Удалить тег")
+                            .on_hover_text(tr("Удалить тег"))
                             .clicked()
                         {
                             state.confirm_delete = Some(id);
@@ -142,12 +144,12 @@ fn body(ui: &mut egui::Ui, state: &mut TagsUi, tags: &Tags, ops: &mut Vec<Op>) {
             egui::TextEdit::singleline(&mut state.new_name)
                 .id(egui::Id::new("new_tag_name"))
                 .desired_width(200.0)
-                .hint_text("Название нового тега")
+                .hint_text(tr("Название нового тега"))
                 .text_color(theme::TEXT_PRIMARY),
         );
         let by_enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let can_add = !state.new_name.trim().is_empty();
-        if (ui.add_enabled(can_add, egui::Button::new("＋ Добавить")).clicked() || by_enter)
+        if (ui.add_enabled(can_add, egui::Button::new(tr("＋ Добавить"))).clicked() || by_enter)
             && can_add
         {
             ops.push(Op::Create(state.new_name.clone()));
@@ -170,17 +172,17 @@ fn body(ui: &mut egui::Ui, state: &mut TagsUi, tags: &Tags, ops: &mut Vec<Op>) {
             .show(ui, |ui| {
                 ui.set_width(crate::ui::fit_width(ui));
                 ui.label(
-                    RichText::new(format!("Удалить тег «{name}»? Он снимется с {used} мод(ов)."))
+                    RichText::new(trf!("Удалить тег «{name}»? Он снимется с {used} мод(ов).", name, used))
                         .color(theme::TEXT_PRIMARY)
                         .size(11.5),
                 );
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    if ui.button(RichText::new("Удалить").color(theme::ERROR_RED)).clicked() {
+                    if ui.button(RichText::new(tr("Удалить")).color(theme::ERROR_RED)).clicked() {
                         ops.push(Op::Delete(id));
                         state.confirm_delete = None;
                     }
-                    if ui.button("Отмена").clicked() {
+                    if ui.button(tr("Отмена")).clicked() {
                         state.confirm_delete = None;
                     }
                 });
@@ -201,7 +203,7 @@ fn apply(state: &mut TagsUi, tags: &mut Tags, ops: Vec<Op>) -> bool {
                     state.error = None;
                     changed = true;
                 } else {
-                    state.error = Some(format!("Имя «{}» занято или пустое", name.trim()));
+                    state.error = Some(trf!("Имя «{trim}» занято или пустое", trim = name.trim()));
                     // Возвращаем поле к настоящему имени.
                     if let Some(tag) = tags.get(id) {
                         state.buffers.insert(tag_index(id), tag.name.clone());

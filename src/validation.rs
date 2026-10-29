@@ -11,6 +11,8 @@
 use std::collections::HashMap;
 
 use crate::mod_data::{ModDb, ModId, Profile};
+use crate::i18n::tr;
+use crate::trf;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Severity {
@@ -89,8 +91,8 @@ fn core_present(db: &ModDb, profile: &Profile, out: &mut Vec<Diagnostic>) {
         out.push(Diagnostic::new(
             Severity::Error,
             "core-missing",
-            "Core не найден".to_string(),
-            "В папке игры нет Data/Core — проверьте путь к игре в настройках.".to_string(),
+            tr("Core не найден").to_string(),
+            tr("В папке игры нет Data/Core — проверьте путь к игре в настройках.").to_string(),
         ));
         return;
     };
@@ -99,8 +101,8 @@ fn core_present(db: &ModDb, profile: &Profile, out: &mut Vec<Diagnostic>) {
             Diagnostic::new(
                 Severity::Error,
                 "core-inactive",
-                "Core выключен".to_string(),
-                "Без Core игра не запустится.".to_string(),
+                tr("Core выключен").to_string(),
+                tr("Без Core игра не запустится.").to_string(),
             )
             .about([core.package_id.clone()])
             .with_fix(Fix::Activate(core.package_id.clone())),
@@ -126,16 +128,16 @@ fn missing_dependencies(db: &ModDb, profile: &Profile, out: &mut Vec<Diagnostic>
                 .map(|(_, workshop)| *workshop);
 
             let detail = if installed {
-                format!("«{}» установлен, но выключен.", name_of(db, dep))
+                trf!("«{dep}» установлен, но выключен.", dep = name_of(db, dep))
             } else if source.is_some() {
-                format!("«{dep}» не установлен. Его можно скачать из мастерской.")
+                trf!("«{dep}» не установлен. Его можно скачать из мастерской.", dep)
             } else {
-                format!("«{dep}» не установлен, а ссылки на мастерскую мод не дал.")
+                trf!("«{dep}» не установлен, а ссылки на мастерскую мод не дал.", dep)
             };
             let mut diag = Diagnostic::new(
                 Severity::Error,
                 "missing-dependency",
-                format!("«{}» требует {dep}", m.name),
+                trf!("«{name}» требует {dep}", name = m.name, dep),
                 detail,
             )
             .about([id.clone(), dep.clone()]);
@@ -173,8 +175,8 @@ fn active_incompatibilities(db: &ModDb, profile: &Profile, out: &mut Vec<Diagnos
                 Diagnostic::new(
                     Severity::Error,
                     "incompatible",
-                    format!("«{}» несовместим с «{}»", m.name, name_of(db, other)),
-                    "Оба мода включены. Оставьте один из них.".to_string(),
+                    trf!("«{name}» несовместим с «{other}»", name = m.name, other = name_of(db, other)),
+                    tr("Оба мода включены. Оставьте один из них.").to_string(),
                 )
                 .about([id.clone(), other.clone()])
                 .with_fix(Fix::Deactivate(other.clone())),
@@ -195,12 +197,12 @@ fn load_order_violations(db: &ModDb, profile: &Profile, out: &mut Vec<Diagnostic
         // Зависимости обязаны грузиться раньше — иначе мод не найдёт их код.
         for earlier in m.load_after.iter().chain(m.dependencies.iter()) {
             if pos.get(earlier).is_some_and(|&j| j > i) {
-                problems.push(format!("должен идти после «{}»", name_of(db, earlier)));
+                problems.push(trf!("должен идти после «{other}»", other = name_of(db, earlier)));
             }
         }
         for later in &m.load_before {
             if pos.get(later).is_some_and(|&j| j < i) {
-                problems.push(format!("должен идти до «{}»", name_of(db, later)));
+                problems.push(trf!("должен идти до «{other}»", other = name_of(db, later)));
             }
         }
 
@@ -211,7 +213,7 @@ fn load_order_violations(db: &ModDb, profile: &Profile, out: &mut Vec<Diagnostic
             Diagnostic::new(
                 Severity::Error,
                 "load-order",
-                format!("«{}» стоит не на своём месте", m.name),
+                trf!("«{name}» стоит не на своём месте", name = m.name),
                 problems.join("; "),
             )
             .about([id.clone()])
@@ -247,8 +249,8 @@ fn unsupported_game_version(
             Diagnostic::new(
                 Severity::Warning,
                 "unsupported-version",
-                format!("«{}» не заявляет поддержку {target}", m.name),
-                format!("Заявлены версии: {}.", m.supported_versions.join(", ")),
+                trf!("«{name}» не заявляет поддержку {target}", name = m.name, target),
+                trf!("Заявлены версии: {versions}.", versions = m.supported_versions.join(", ")),
             )
             .about([id.clone()])
             .with_fix(Fix::Deactivate(id.clone())),
@@ -269,8 +271,8 @@ fn duplicate_package_ids(db: &ModDb, out: &mut Vec<Diagnostic>) {
             Diagnostic::new(
                 Severity::Warning,
                 "duplicate",
-                format!("«{}» установлен несколько раз", group.id),
-                format!("Используется:\n{}\nЛишние копии:\n{extra}", group.kept.display()),
+                trf!("«{id}» установлен несколько раз", id = group.id),
+                trf!("Используется:\n{display}\nЛишние копии:\n{extra}", display = group.kept.display(), extra),
             )
             .about([group.id.clone()]),
         );

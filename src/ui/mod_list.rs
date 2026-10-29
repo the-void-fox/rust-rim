@@ -12,6 +12,7 @@ use crate::baseline::Baseline;
 use crate::tags::Tags;
 use crate::ui::details::{source_color, source_label};
 use crate::ui::theme;
+use crate::i18n::tr;
 
 pub const ROW_HEIGHT: f32 = 22.0;
 
@@ -238,7 +239,7 @@ impl<'a> ModList<'a> {
                         ui.painter().rect_filled(badge_rect, 3.0, theme::TEXT_ACCENT.gamma_multiply(0.25));
                         ui.painter().text(
                             badge_rect.center(), Align2::CENTER_CENTER,
-                            "НОВЫЙ", FontId::proportional(8.5), theme::TEXT_ACCENT,
+                            tr("НОВЫЙ"), FontId::proportional(8.5), theme::TEXT_ACCENT,
                         );
                     }
 
@@ -262,9 +263,9 @@ impl<'a> ModList<'a> {
 
                     // Предупреждение
                     let warn_text: Option<(&str, Color32, &str)> = if has_incompat {
-                        Some(("×", theme::ERROR_RED, "Конфликт с активным модом"))
+                        Some(("×", theme::ERROR_RED, tr("Конфликт с активным модом")))
                     } else if has_missing_deps && self.is_active {
-                        Some(("⚠", theme::WARNING_AMBER, "Отсутствуют зависимости"))
+                        Some(("⚠", theme::WARNING_AMBER, tr("Отсутствуют зависимости")))
                     } else {
                         None
                     };
@@ -302,7 +303,7 @@ impl<'a> ModList<'a> {
                         if icon_rect.contains(p) {
                             resp.on_hover_text(source_label(&m.source))
                         } else if is_new && badge_rect.contains(p) {
-                            resp.on_hover_text("Включён после рабочей сборки")
+                            resp.on_hover_text(tr("Включён после рабочей сборки"))
                         } else if warn_rect.contains(p) {
                             if let Some((_, _, tip)) = warn_text {
                                 resp.on_hover_text(tip)
@@ -322,28 +323,28 @@ impl<'a> ModList<'a> {
                             .color(theme::TEXT_ACCENT).size(11.0).strong());
                         ui.separator();
                         if self.is_active {
-                            if ui.button("⬅  Деактивировать").clicked() {
+                            if ui.button(tr("⬅  Деактивировать")).clicked() {
                                 action = Some(Action::Deactivate(id.clone()));
                                 ui.close();
                             }
                             ui.separator();
-                            if ui.button("⬆  Переместить вверх").clicked() {
+                            if ui.button(tr("⬆  Переместить вверх")).clicked() {
                                 action = Some(Action::MoveUp(id.clone()));
                                 ui.close();
                             }
-                            if ui.button("⬇  Переместить вниз").clicked() {
+                            if ui.button(tr("⬇  Переместить вниз")).clicked() {
                                 action = Some(Action::MoveDown(id.clone()));
                                 ui.close();
                             }
-                        } else if ui.button("➡  Активировать").clicked() {
+                        } else if ui.button(tr("➡  Активировать")).clicked() {
                             action = Some(Action::Activate(id.clone()));
                             ui.close();
                         }
                         ui.separator();
-                        ui.menu_button("⚑  Теги", |ui| {
+                        ui.menu_button(tr("⚑  Теги"), |ui| {
                             ui.set_min_width(180.0);
                             if self.tags.is_empty() {
-                                ui.label(RichText::new("тегов пока нет")
+                                ui.label(RichText::new(tr("тегов пока нет"))
                                     .color(theme::TEXT_MUTED).size(11.0).italics());
                             }
                             for tag_id in self.tags.ids() {
@@ -359,13 +360,13 @@ impl<'a> ModList<'a> {
                                 }
                             }
                             ui.separator();
-                            if ui.button("⚙  Управление тегами…").clicked() {
+                            if ui.button(tr("⚙  Управление тегами…")).clicked() {
                                 action = Some(Action::OpenTagEditor);
                                 ui.close();
                             }
                         });
                         ui.separator();
-                        if ui.button("▤  Открыть папку").clicked() {
+                        if ui.button(tr("▤  Открыть папку")).clicked() {
                             action = Some(Action::OpenFolder(id.clone()));
                             ui.close();
                         }
@@ -405,12 +406,12 @@ fn draw_header(ui: &mut Ui) {
     painter.text(
         Pos2::new(rect.left() + COL_TAG + COL_ICON + 4.0, rect.center().y),
         Align2::LEFT_CENTER,
-        "НАЗВАНИЕ", FontId::proportional(10.0), theme::TEXT_MUTED,
+        tr("НАЗВАНИЕ"), FontId::proportional(10.0), theme::TEXT_MUTED,
     );
     painter.text(
         Pos2::new(rect.right() - COL_WARN - COL_VERSION, rect.center().y),
         Align2::LEFT_CENTER,
-        "ВЕРСИЯ", FontId::proportional(10.0), theme::TEXT_MUTED,
+        tr("ВЕРСИЯ"), FontId::proportional(10.0), theme::TEXT_MUTED,
     );
 }
 

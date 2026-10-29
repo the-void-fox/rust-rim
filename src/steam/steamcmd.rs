@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use crate::i18n::tr;
+use crate::trf;
 
 pub const RIMWORLD_APP_ID: &str = "294100";
 
@@ -91,14 +93,11 @@ fn run_install(base: &Path, tx: &mpsc::Sender<InstallEvent>) -> anyhow::Result<(
         "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz"
     };
 
-    let _ = tx.send(InstallEvent::Log(format!("Загрузка: {url}")));
+    let _ = tx.send(InstallEvent::Log(trf!("Загрузка: {url}", url)));
 
     let bytes = download_bytes(url)?;
 
-    let _ = tx.send(InstallEvent::Log(format!(
-        "Распаковка ({} МБ)...",
-        bytes.len() / 1_048_576
-    )));
+    let _ = tx.send(InstallEvent::Log(trf!("Распаковка ({mb} МБ)...", mb = bytes.len() / 1_048_576)));
 
     if cfg!(target_os = "windows") {
         extract_zip(&bytes, &install_dir)?;
@@ -108,12 +107,10 @@ fn run_install(base: &Path, tx: &mpsc::Sender<InstallEvent>) -> anyhow::Result<(
     }
 
     if steamcmd_executable(base).exists() {
-        let _ = tx.send(InstallEvent::Log("SteamCMD успешно установлен.".into()));
+        let _ = tx.send(InstallEvent::Log(tr("SteamCMD успешно установлен.").into()));
         let _ = tx.send(InstallEvent::Done);
     } else {
-        return Err(anyhow::anyhow!(
-            "Исполняемый файл не найден после распаковки"
-        ));
+        return Err(anyhow::anyhow!("{}", tr("Исполняемый файл не найден после распаковки")));
     }
     Ok(())
 }
@@ -121,7 +118,7 @@ fn run_install(base: &Path, tx: &mpsc::Sender<InstallEvent>) -> anyhow::Result<(
 fn download_bytes(url: &str) -> anyhow::Result<Vec<u8>> {
     let mut response = ureq::get(url)
         .call()
-        .map_err(|e| anyhow::anyhow!("HTTP ошибка: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("{}", trf!("HTTP ошибка: {e}", e)))?;
     // Архив SteamCMD — несколько десятков МБ; лимит тела по умолчанию (10 МБ) мал.
     let buf = response
         .body_mut()
@@ -240,7 +237,7 @@ pub fn download_mods_multi_async(
             if src.is_dir() {
                 if let Err(e) = move_dir_contents(&src, &dst) {
                     let _ = worker_tx.send(DownloadEvent::Log(
-                        format!("⚠ Не удалось переместить контент воркера: {e}")
+                        trf!("⚠ Не удалось переместить контент воркера: {e}", e)
                     ));
                 }
                 let _ = std::fs::remove_dir_all(worker_base);
@@ -317,21 +314,18 @@ fn download_with_retry(
         Ok(failed) => failed,
         Err(e) => {
             // SteamCMD не запустился — повтор ничего не изменит.
-            let _ = tx.send(DownloadEvent::Log(format!("Критическая ошибка: {e}")));
+            let _ = tx.send(DownloadEvent::Log(trf!("Критическая ошибка: {e}", e)));
             return ids.to_vec();
         }
     };
     if failed.is_empty() {
         return failed;
     }
-    let _ = tx.send(DownloadEvent::Log(format!(
-        "⟳ Повтор для {} мод(ов) с проверкой файлов…",
-        failed.len()
-    )));
+    let _ = tx.send(DownloadEvent::Log(trf!("⟳ Повтор для {count} мод(ов) с проверкой файлов…", count = failed.len())));
     match run_download(base, &failed, true, tx) {
         Ok(still) => still,
         Err(e) => {
-            let _ = tx.send(DownloadEvent::Log(format!("Критическая ошибка: {e}")));
+            let _ = tx.send(DownloadEvent::Log(trf!("Критическая ошибка: {e}", e)));
             failed
         }
     }
@@ -349,10 +343,8 @@ fn run_download(
     let (exe, is_system) = if is_nixos() {
         match find_system_steamcmd() {
             Some(p) => (p, true),
-            None => return Err(anyhow::anyhow!(
-                "NixOS: steamcmd не найден в PATH.\n\
-                 Установите через nixpkgs: nix-shell -p steamcmd"
-            )),
+            None => return Err(anyhow::anyhow!("{}", tr("NixOS: steamcmd не найден в PATH.\n\
+                 Установите через nixpkgs: nix-shell -p steamcmd"))),
         }
     } else {
         (steamcmd_executable(base), false)
@@ -363,12 +355,9 @@ fn run_download(
     let _ = tx.send(DownloadEvent::Log(format!(
         "SteamCMD: {} {}",
         exe.display(),
-        if is_system { "(системный)" } else { "" }
+        if is_system { tr("(системный)") } else { "" }
     )));
-    let _ = tx.send(DownloadEvent::Log(format!(
-        "Скачиваем {} мод(ов)...",
-        ids.len()
-    )));
+    let _ = tx.send(DownloadEvent::Log(trf!("Скачиваем {count} мод(ов)...", count = ids.len())));
 
     // ── Запуск SteamCMD (аргументы вместо скрипта — совместимо с NixOS FHS) ──
     let steam_path_str = steam_path.to_string_lossy().replace('\\', "/");
@@ -378,7 +367,7 @@ fn run_download(
         steamcmd_command(&exe)
     };
     if wrapped {
-        let _ = tx.send(DownloadEvent::Log("(обёрнут в steam-run для FHS-совместимости)".into()));
+        let _ = tx.send(DownloadEvent::Log(tr("(обёрнут в steam-run для FHS-совместимости)").into()));
     }
     cmd.arg("+force_install_dir").arg(&steam_path_str);
     cmd.arg("+login").arg("anonymous");
@@ -400,7 +389,7 @@ fn run_download(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| anyhow::anyhow!("Не удалось запустить SteamCMD: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("{}", trf!("Не удалось запустить SteamCMD: {e}", e)))?;
 
     // Отдельный поток для чтения stderr (предотвращает deadlock).
     // Используем drain_output вместо lines() — SteamCMD может выводить \r без \n.
@@ -420,7 +409,7 @@ fn run_download(
 
     // ── Чтение stdout и разбор прогресса ────────────────────────────────────
     // drain_output разбивает по \n И \r, исключая pipe-deadlock от \r-прогресса SteamCMD.
-    let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("stdout не настроен"))?;
+    let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("{}", tr("stdout не настроен")))?;
     let mut reader = std::io::BufReader::new(stdout);
 
     let mut succeeded: std::collections::HashSet<u64> = std::collections::HashSet::new();
@@ -446,10 +435,7 @@ fn run_download(
 
     let status = child.wait()?;
     if !status.success() {
-        let _ = tx.send(DownloadEvent::Log(format!(
-            "× SteamCMD завершился с ошибкой (код {})",
-            status.code().unwrap_or(-1)
-        )));
+        let _ = tx.send(DownloadEvent::Log(trf!("× SteamCMD завершился с ошибкой (код {code})", code = status.code().unwrap_or(-1))));
     }
 
     // Неудача — всё, что SteamCMD не подтвердил, а не только явные ERROR!:

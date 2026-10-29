@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::paths::{self, Executable, APP_ID};
+use crate::i18n::tr;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub enum Runner {
@@ -34,12 +35,12 @@ pub enum Runner {
 impl Runner {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Auto => "Автоматически",
-            Self::Native => "Нативный запуск",
+            Self::Auto => tr("Автоматически"),
+            Self::Native => tr("Нативный запуск"),
             Self::Umu => "Proton (umu-run)",
             Self::Wine => "Wine",
-            Self::Steam => "Через Steam",
-            Self::Custom => "Своя команда",
+            Self::Steam => tr("Через Steam"),
+            Self::Custom => tr("Своя команда"),
         }
     }
 }

@@ -10,6 +10,7 @@
 //! абстракция, и она появится вместе со своим первым потребителем.
 
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use crate::i18n::tr;
 
 pub enum Job<T> {
     Idle,
@@ -49,7 +50,7 @@ impl<T: Send + 'static> Job<T> {
             }
             Err(TryRecvError::Empty) => false,
             Err(TryRecvError::Disconnected) => {
-                *self = Job::Failed("фоновая задача прервалась".to_string());
+                *self = Job::Failed(tr("фоновая задача прервалась").to_string());
                 true
             }
         }

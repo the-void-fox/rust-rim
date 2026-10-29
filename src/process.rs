@@ -11,6 +11,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use crate::trf;
 
 /// Сколько последних строк держим. Proton при первом запуске выдаёт тысячи
 /// строк, и весь этот вывод в памяти держать незачем.
@@ -78,7 +79,7 @@ impl Run {
             }
             Ok(None) => false,
             Err(e) => {
-                self.buffer.lock().unwrap().push(format!("[ошибка ожидания: {e}]"));
+                self.buffer.lock().unwrap().push(trf!("[ошибка ожидания: {e}]", e));
                 self.child = None;
                 true
             }

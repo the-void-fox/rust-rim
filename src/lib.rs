@@ -7,6 +7,7 @@ pub mod bisect;
 pub mod description;
 pub mod fs_util;
 pub mod game;
+pub mod i18n;
 pub mod job;
 pub mod log_analysis;
 pub mod mod_data;

@@ -6,6 +6,8 @@
 use egui::{Align, Frame, Layout, Margin, RichText, Stroke};
 
 use crate::ui::{fit_width, theme};
+use crate::i18n::tr;
+use crate::trf;
 
 /// Сколько символов названия влезает в ярлык очереди.
 const TAG_CHARS: usize = 22;
@@ -62,7 +64,7 @@ pub fn footer(ui: &mut egui::Ui, queue: &mut Queue, id_salt: &str) -> Option<Vec
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(format!("Очередь: {}  ", queue.len()))
+                    RichText::new(trf!("Очередь: {count}  ", count = queue.len()))
                         .color(theme::TEXT_MUTED)
                         .size(11.0),
                 );
@@ -86,7 +88,7 @@ pub fn footer(ui: &mut egui::Ui, queue: &mut Queue, id_salt: &str) -> Option<Vec
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let dl = egui::Button::new(
-                        RichText::new("⬇  Скачать через SteamCMD")
+                        RichText::new(tr("⬇  Скачать через SteamCMD"))
                             .color(theme::TEXT_PRIMARY)
                             .size(11.5),
                     )
@@ -98,7 +100,7 @@ pub fn footer(ui: &mut egui::Ui, queue: &mut Queue, id_salt: &str) -> Option<Vec
                     }
                     ui.add_space(6.0);
                     if ui
-                        .button(RichText::new("× Очистить").color(theme::TEXT_MUTED).size(11.0))
+                        .button(RichText::new(tr("× Очистить")).color(theme::TEXT_MUTED).size(11.0))
                         .clicked()
                     {
                         queue.clear();
@@ -123,7 +125,7 @@ fn tag(ui: &mut egui::Ui, id: u64, title: &str) -> bool {
     )
     .fill(theme::BG_DARK)
     .stroke(Stroke::new(1.0, theme::BORDER));
-    ui.add(button).on_hover_text(format!("Убрать {id}")).clicked()
+    ui.add(button).on_hover_text(trf!("Убрать {id}", id)).clicked()
 }
 
 #[cfg(test)]

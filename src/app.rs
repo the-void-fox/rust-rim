@@ -32,6 +32,8 @@ use crate::ui::preview::Preview;
 use crate::ui::steamcmd_panel::SteamCmdPanel;
 use crate::ui::workshop::WorkshopBrowser;
 use crate::ui::{dialogs, duplicates, tags_panel, theme, toolbar, widgets};
+use crate::i18n::tr;
+use crate::trf;
 
 // ─── Payload для Drag & Drop ─────────────────────────────────────────────────
 #[derive(Clone, Debug)]
@@ -146,6 +148,7 @@ impl Default for RustRim {
 impl RustRim {
     pub fn new() -> Self {
         let settings = AppSettings::load();
+        settings.apply_language();
         crate::steam::workshop_api::set_api_key(&settings.steam_api_key);
         let has_paths = settings.has_required_paths();
         let mut app = Self {
@@ -482,13 +485,13 @@ impl RustRim {
                 tracing::error!("Failed to write ModsConfig.xml: {}", e);
                 // Раньше ошибка уходила только в лог, и пользователь думал,
                 // что сборка сохранена.
-                self.notice = Some((format!("Не удалось записать ModsConfig.xml:\n{e:#}"), true));
+                self.notice = Some((trf!("Не удалось записать ModsConfig.xml:\n{e}", e = format!("{:#}", e)), true));
             }
         }
     }
 
     fn export_mod_list(&mut self) {
-        let Some(path) = dialogs::pick_save_file("Сохранить список модов") else { return };
+        let Some(path) = dialogs::pick_save_file(tr("Сохранить список модов")) else { return };
         let ids = self.active_ids_for_export();
         match write_mod_list(&path, &ids) {
             Ok(()) => tracing::info!("Exported {} mods to {:?}", ids.len(), path),
@@ -497,7 +500,7 @@ impl RustRim {
     }
 
     fn import_mod_list(&mut self) {
-        let Some(path) = dialogs::pick_open_file("Загрузить список модов") else { return };
+        let Some(path) = dialogs::pick_open_file(tr("Загрузить список модов")) else { return };
         match parse_mods_config(&path) {
             Ok(ids) => {
                 tracing::info!("Imported mod list with {} entries from {:?}", ids.len(), path);
@@ -618,18 +621,18 @@ impl RustRim {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(format!("Активных: {active}  •  Всего: {total}"))
+                        RichText::new(trf!("Активных: {active}  •  Всего: {total}", active, total))
                             .color(theme::TEXT_MUTED)
                             .size(11.5),
                     );
                     if new_count > 0 {
                         ui.separator();
                         ui.label(
-                            RichText::new(format!("новых: {new_count}"))
+                            RichText::new(trf!("новых: {new_count}", new_count))
                                 .color(theme::TEXT_ACCENT)
                                 .size(11.5),
                         )
-                        .on_hover_text("Включены после рабочей сборки. Сломалось — «Сборка → Выключить новые»");
+                        .on_hover_text(tr("Включены после рабочей сборки. Сломалось — «Сборка → Выключить новые»"));
                     }
                     if warnings > 0 {
                         ui.separator();
@@ -643,12 +646,12 @@ impl RustRim {
                     if self.validation.was_checked() && (errors > 0 || warns > 0) {
                         ui.separator();
                         let color = if errors > 0 { theme::ERROR_RED } else { theme::WARNING_AMBER };
-                        let label = RichText::new(format!("Проверка: × {errors}  ⚠ {warns}"))
+                        let label = RichText::new(trf!("Проверка: × {errors}  ⚠ {warns}", errors, warns))
                             .color(color)
                             .size(11.5);
                         if ui
                             .add(egui::Button::new(label).frame(false))
-                            .on_hover_text("Открыть проверку сборки")
+                            .on_hover_text(tr("Открыть проверку сборки"))
                             .clicked()
                         {
                             self.validation.open = true;
@@ -683,7 +686,7 @@ impl RustRim {
                     .show(ui, |ui| {
                         ui.set_width(widgets::fit_width(ui));
                         ui.label(
-                            RichText::new("ИНФОРМАЦИЯ О МОДЕ")
+                            RichText::new(tr("ИНФОРМАЦИЯ О МОДЕ"))
                                 .color(theme::TEXT_MUTED)
                                 .size(11.0)
                                 .strong(),
@@ -737,9 +740,9 @@ impl RustRim {
     /// Одна колонка списка модов: заголовок, поиск и сам список.
     fn list_column(&mut self, ui: &mut egui::Ui, is_active: bool, count: usize) -> Option<Action> {
         let (title, accent) = if is_active {
-            ("АКТИВНЫЕ МОДЫ", theme::HEADER_RIGHT)
+            (tr("АКТИВНЫЕ МОДЫ"), theme::HEADER_RIGHT)
         } else {
-            ("НЕАКТИВНЫЕ МОДЫ", theme::HEADER_LEFT)
+            (tr("НЕАКТИВНЫЕ МОДЫ"), theme::HEADER_LEFT)
         };
         let (ids, query, search_id, elsewhere) = if is_active {
             (&self.caches.active, &mut self.search.active_query, "active_search", self.caches.active_elsewhere)
@@ -757,9 +760,9 @@ impl RustRim {
                 widgets::search_bar(ui, query, search_id);
                 ui.add_space(2.0);
                 if ids.is_empty() && elsewhere > 0 {
-                    let other = if is_active { "неактивных" } else { "активных" };
+                    let other = if is_active { tr("неактивных") } else { tr("активных") };
                     ui.label(
-                        RichText::new(format!("Здесь ничего, но среди {other} найдено: {elsewhere}"))
+                        RichText::new(trf!("Здесь ничего, но среди {other} найдено: {elsewhere}", other, elsewhere))
                             .color(theme::TEXT_MUTED)
                             .size(11.0)
                             .italics(),
@@ -1100,7 +1103,7 @@ impl RustRim {
     /// Короткое сообщение о результате действия (например, запуска игры).
     fn show_notice(&mut self, ctx: &egui::Context) {
         let Some((text, is_error)) = self.notice.clone() else { return };
-        let title = if is_error { "Ошибка" } else { "Готово" };
+        let title = if is_error { tr("Ошибка") } else { tr("Готово") };
         let color = if is_error { theme::ERROR_RED } else { theme::ACTIVE_GREEN };
         let mut open = true;
 

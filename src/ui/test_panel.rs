@@ -6,6 +6,8 @@ use crate::log_analysis::LogIssue;
 use crate::mod_data::ModId;
 use crate::testing::{Phase, TestRun, Verdict};
 use crate::ui::{fit_width, theme};
+use crate::i18n::tr;
+use crate::trf;
 
 #[derive(Default)]
 pub struct TestUi {
@@ -57,7 +59,7 @@ pub fn show(ctx: &egui::Context, state: &mut TestUi, run: Option<&TestRun>) -> R
     let mut reply = Reply::None;
     let mut open = true;
 
-    Window::new("⚛  Тест сборки")
+    Window::new(tr("⚛  Тест сборки"))
         .open(&mut open)
         .collapsible(true)
         .resizable(true)
@@ -82,9 +84,9 @@ pub fn show(ctx: &egui::Context, state: &mut TestUi, run: Option<&TestRun>) -> R
             None => {
                 ui.label(
                     RichText::new(
-                        "Прогон запускает игру с -quicktest: она грузит текущую сборку, \
+                        tr("Прогон запускает игру с -quicktest: она грузит текущую сборку, \
                          генерирует карту и пишет лог, по которому выносится вердикт.\n\n\
-                         ModsConfig.xml на время прогона подменяется и возвращается обратно.",
+                         ModsConfig.xml на время прогона подменяется и возвращается обратно."),
                     )
                     .color(theme::TEXT_MUTED)
                     .size(11.5),
@@ -104,7 +106,7 @@ fn status(ui: &mut egui::Ui, run: &TestRun, reply: &mut Reply) {
                 let (mark, color) = verdict_look(verdict);
                 ui.label(RichText::new(mark).color(color).size(13.0));
                 ui.label(
-                    RichText::new(format!("{} • {secs} с", verdict_text(verdict)))
+                    RichText::new(trf!("{status} • {secs} с", status = verdict_text(verdict), secs))
                         .color(color)
                         .size(12.0)
                         .strong(),
@@ -113,7 +115,7 @@ fn status(ui: &mut egui::Ui, run: &TestRun, reply: &mut Reply) {
             phase => {
                 ui.spinner();
                 ui.label(
-                    RichText::new(format!("{} • {secs} с", phase_text(phase)))
+                    RichText::new(trf!("{status} • {secs} с", status = phase_text(phase), secs))
                         .color(theme::TEXT_PRIMARY)
                         .size(12.0),
                 );
@@ -123,13 +125,13 @@ fn status(ui: &mut egui::Ui, run: &TestRun, reply: &mut Reply) {
         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
             match run.phase() {
                 Phase::Done(_) => {
-                    if ui.button("⟳ Повторить").clicked() {
+                    if ui.button(tr("⟳ Повторить")).clicked() {
                         *reply = Reply::Restart;
                     }
                 }
                 _ => {
                     if ui
-                        .button(RichText::new("⏹ Остановить").color(theme::ERROR_RED))
+                        .button(RichText::new(tr("⏹ Остановить")).color(theme::ERROR_RED))
                         .clicked()
                     {
                         *reply = Reply::Cancel;
@@ -143,16 +145,12 @@ fn status(ui: &mut egui::Ui, run: &TestRun, reply: &mut Reply) {
 pub fn phase_text(phase: &Phase) -> String {
     match phase {
         // Первую минуту лога нет вообще — это норма, а не зависание.
-        Phase::Starting => "Запуск: Proton поднимает окружение".to_string(),
-        Phase::Loading { lines } => format!("Загрузка модов ({lines} строк лога)"),
+        Phase::Starting => tr("Запуск: Proton поднимает окружение").to_string(),
+        Phase::Loading { lines } => trf!("Загрузка модов ({lines} строк лога)", lines),
         // Маркер загрузки срабатывает на первой смене сцены, до карты, —
         // поэтому «загрузилась», а не «карта готова».
-        Phase::Settling { lines, quiet } => format!(
-            "Загрузилась, лог молчит {} с из {} ({lines} строк)",
-            quiet.as_secs(),
-            crate::testing::DEFAULT_SETTLE.as_secs(),
-        ),
-        Phase::Done(_) => "Готово".to_string(),
+        Phase::Settling { lines, quiet } => trf!("Загрузилась, лог молчит {quiet} с из {limit} ({lines} строк)", quiet = quiet.as_secs(), limit = crate::testing::DEFAULT_SETTLE.as_secs(), lines),
+        Phase::Done(_) => tr("Готово").to_string(),
     }
 }
 
@@ -169,18 +167,18 @@ pub fn verdict_look(verdict: &Verdict) -> (&'static str, Color32) {
 
 pub fn verdict_text(verdict: &Verdict) -> String {
     match verdict {
-        Verdict::Passed => "Сборка загрузилась без ошибок".to_string(),
-        Verdict::LoadedWithErrors => "Загрузилась, но в логе есть ошибки".to_string(),
-        Verdict::ErrorStorm => "Ошибка повторяется без остановки".to_string(),
+        Verdict::Passed => tr("Сборка загрузилась без ошибок").to_string(),
+        Verdict::LoadedWithErrors => tr("Загрузилась, но в логе есть ошибки").to_string(),
+        Verdict::ErrorStorm => tr("Ошибка повторяется без остановки").to_string(),
         Verdict::Crashed { code } => match code {
-            Some(c) => format!("Игра завершилась, не начав загрузку (код {c})"),
-            None => "Игра завершилась, не начав загрузку".to_string(),
+            Some(c) => trf!("Игра завершилась, не начав загрузку (код {c})", c),
+            None => tr("Игра завершилась, не начав загрузку").to_string(),
         },
         Verdict::DiedWhileLoading => {
-            "Игра пропала посреди загрузки модов — до карты не дошло".to_string()
+            tr("Игра пропала посреди загрузки модов — до карты не дошло").to_string()
         }
-        Verdict::TimedOut => "Не уложились в отведённое время".to_string(),
-        Verdict::Cancelled => "Остановлено".to_string(),
+        Verdict::TimedOut => tr("Не уложились в отведённое время").to_string(),
+        Verdict::Cancelled => tr("Остановлено").to_string(),
     }
 }
 
@@ -188,20 +186,20 @@ pub fn verdict_text(verdict: &Verdict) -> String {
 fn explanation(verdict: &Verdict) -> Option<&'static str> {
     match verdict {
         Verdict::DiedWhileLoading => Some(
-            "Так бывает под umu: Prepatcher перезапускает игру, а контейнер \
+            tr("Так бывает под umu: Prepatcher перезапускает игру, а контейнер \
              к этому моменту уже свернулся. Попробуйте повторить прогон или \
-             выбрать другой способ запуска в настройках.",
+             выбрать другой способ запуска в настройках."),
         ),
         Verdict::ErrorStorm => Some(
-            "Игра дошла до карты, но роняет одно и то же исключение каждый кадр \
+            tr("Игра дошла до карты, но роняет одно и то же исключение каждый кадр \
              и пишет его в лог без остановки. Дожидаться тишины было бесполезно, \
              поэтому прогон остановлен сразу. Смотрите первую же запись ниже — \
-             обычно виноват мод из её списка подозреваемых.",
+             обычно виноват мод из её списка подозреваемых."),
         ),
         Verdict::TimedOut => Some(
-            "Лог не замолк и не дал повода вынести вердикт за отведённое время. \
+            tr("Лог не замолк и не дал повода вынести вердикт за отведённое время. \
              Возможно, сборка очень большая — увеличьте предел или запустите \
-             игру вручную и посмотрите, на чём она стоит.",
+             игру вручную и посмотрите, на чём она стоит."),
         ),
         _ => None,
     }
@@ -210,7 +208,7 @@ fn explanation(verdict: &Verdict) -> Option<&'static str> {
 fn running(ui: &mut egui::Ui, run: &TestRun) {
     let lines = run.process_lines();
     ui.label(
-        RichText::new("Вывод запуска")
+        RichText::new(tr("Вывод запуска"))
             .color(theme::TEXT_MUTED)
             .size(10.5)
             .strong(),
@@ -242,12 +240,12 @@ fn done(ui: &mut egui::Ui, verdict: &Verdict, state: &TestUi, reply: &mut Reply)
     }
 
     if !state.issues_ready {
-        ui.label(RichText::new("Разбираю лог…").color(theme::TEXT_MUTED).size(11.0));
+        ui.label(RichText::new(tr("Разбираю лог…")).color(theme::TEXT_MUTED).size(11.0));
         return;
     }
     if state.issues.is_empty() {
         ui.label(
-            RichText::new("Записей об ошибках в логе нет.")
+            RichText::new(tr("Записей об ошибках в логе нет."))
                 .color(theme::ACTIVE_GREEN)
                 .size(11.5),
         );
@@ -256,7 +254,7 @@ fn done(ui: &mut egui::Ui, verdict: &Verdict, state: &TestUi, reply: &mut Reply)
 
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new(format!("Записей в логе: {}", state.issues.len()))
+            RichText::new(trf!("Записей в логе: {count}", count = state.issues.len()))
                 .color(theme::TEXT_MUTED)
                 .size(10.5),
         );
@@ -264,10 +262,10 @@ fn done(ui: &mut egui::Ui, verdict: &Verdict, state: &TestUi, reply: &mut Reply)
         // ошибок нечего воспроизводить.
         if !matches!(verdict, Verdict::Passed | Verdict::Cancelled)
             && ui
-                .button(RichText::new("⚖ Найти виновника").size(11.0))
+                .button(RichText::new(tr("⚖ Найти виновника")).size(11.0))
                 .on_hover_text(
-                    "Запускать игру с урезанными сборками, пока не останется то, \
-                     без чего проблема пропадает. Каждый прогон — минуты.",
+                    tr("Запускать игру с урезанными сборками, пока не останется то, \
+                     без чего проблема пропадает. Каждый прогон — минуты."),
                 )
                 .clicked()
         {
@@ -318,7 +316,7 @@ fn draw_issue(ui: &mut egui::Ui, issue: &LogIssue, reply: &mut Reply) {
             ui.add_space(3.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label(
-                    RichText::new("Подозреваемые:").color(theme::TEXT_MUTED).size(10.5),
+                    RichText::new(tr("Подозреваемые:")).color(theme::TEXT_MUTED).size(10.5),
                 );
                 for suspect in &issue.suspects {
                     let color = if suspect.score >= 5 {
@@ -333,12 +331,7 @@ fn draw_issue(ui: &mut egui::Ui, issue: &LogIssue, reply: &mut Reply) {
                     )
                     .fill(theme::BG_DARK)
                     .stroke(Stroke::new(1.0, color.gamma_multiply(0.4)));
-                    let tip = format!(
-                        "{}\nсчёт: {}\n{}",
-                        suspect.package_id,
-                        suspect.score,
-                        suspect.evidence.join("\n"),
-                    );
+                    let tip = trf!("{package_id}\nсчёт: {score}\n{evidence}", package_id = suspect.package_id, score = suspect.score, evidence = suspect.evidence.join("\n"));
                     if ui.add(button).on_hover_text(tip).clicked() {
                         *reply = Reply::Select(suspect.package_id.clone());
                     }

@@ -4,6 +4,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::RwLock;
+use crate::i18n::tr;
+use crate::trf;
 
 pub const APP_ID: u64 = 294100;
 
@@ -51,10 +53,10 @@ impl SortOrder {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Trending        => "Популярные",
-            Self::Latest          => "Новые",
-            Self::MostSubscribed  => "По подпискам",
-            Self::RecentlyUpdated => "Обновлённые",
+            Self::Trending        => tr("Популярные"),
+            Self::Latest          => tr("Новые"),
+            Self::MostSubscribed  => tr("По подпискам"),
+            Self::RecentlyUpdated => tr("Обновлённые"),
         }
     }
 
@@ -137,13 +139,13 @@ pub fn fetch_workshop_page(
 fn search(section: Section, query: &str, page: u32, sort: SortOrder, tags: &[String]) -> Result<(Vec<Found>, bool)> {
     let Some(key) = api_key() else {
         return search_page(section, query, page, sort, tags).map_err(|e| {
-            anyhow!("{e}\nЕсли так продолжится — укажите ключ Steam Web API в настройках (вкладка «Поведение»).")
+            anyhow!("{}", trf!("{e}\nЕсли так продолжится — укажите ключ Steam Web API в настройках (вкладка «Поведение»).", e))
         });
     };
     match search_api(&key, section, query, page, sort, tags) {
         Ok(r) => Ok(r),
         Err(api_err) => search_page(section, query, page, sort, tags)
-            .map_err(|page_err| anyhow!("Steam Web API: {api_err}\nСтраница мастерской: {page_err}")),
+            .map_err(|page_err| anyhow!("{}", trf!("Steam Web API: {api_err}\nСтраница мастерской: {page_err}", api_err, page_err))),
     }
 }
 
@@ -170,7 +172,7 @@ fn search_page(section: Section, query: &str, page: u32, sort: SortOrder, tags: 
     let data = roots
         .iter()
         .find_map(find_browse_data)
-        .ok_or_else(|| anyhow!("Steam изменил страницу мастерской: результаты поиска не найдены"))?;
+        .ok_or_else(|| anyhow!("{}", tr("Steam изменил страницу мастерской: результаты поиска не найдены")))?;
 
     // Имена авторов Steam кладёт то рядом с результатами, то отдельными
     // запросами PlayerLinkDetails — собираем отовсюду.
@@ -233,7 +235,7 @@ fn search_api(key: &str, section: Section, query: &str, page: u32, sort: SortOrd
     let resp = &json["response"];
     let details = resp["publishedfiledetails"].as_array().cloned().unwrap_or_default();
     if details.is_empty() && resp["total"].is_null() {
-        bail!("пустой ответ (неверный ключ?)");
+        bail!("{}", tr("пустой ответ (неверный ключ?)"));
     }
 
     let creators: Vec<String> = details.iter().map(|d| steamid_of(&d["creator"])).collect();
@@ -261,7 +263,7 @@ fn search_api(key: &str, section: Section, query: &str, page: u32, sort: SortOrd
 pub fn check_api_key(key: &str) -> Result<u64> {
     let key = key.trim();
     if key.is_empty() {
-        bail!("ключ не указан");
+        bail!("{}", tr("ключ не указан"));
     }
     let url = format!(
         "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/?key={}&appid={APP_ID}&query_type=1&numperpage=1&totalonly=true",
@@ -269,7 +271,7 @@ pub fn check_api_key(key: &str) -> Result<u64> {
     );
     get_json_keyed(&url, key)?["response"]["total"]
         .as_u64()
-        .ok_or_else(|| anyhow!("Steam не принял ключ"))
+        .ok_or_else(|| anyhow!("{}", tr("Steam не принял ключ")))
 }
 
 /// steamid → имя через ISteamUser/GetPlayerSummaries (до 100 за запрос).
@@ -374,7 +376,7 @@ pub fn fetch_collection_mods(collection_id: u64) -> Result<(String, Vec<Workshop
     let detail = &json["response"]["collectiondetails"][0];
 
     let children = detail["children"].as_array()
-        .ok_or_else(|| anyhow!("Сборка пустая или недоступна"))?;
+        .ok_or_else(|| anyhow!("{}", tr("Сборка пустая или недоступна")))?;
 
     let ids: Vec<u64> = children.iter()
         .filter_map(|c| c["publishedfileid"].as_str())
@@ -396,7 +398,7 @@ pub fn fetch_collection_mods(collection_id: u64) -> Result<(String, Vec<Workshop
     let json = post_form("https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/", &body)?;
     let details = json["response"]["publishedfiledetails"]
         .as_array()
-        .ok_or_else(|| anyhow!("Нет данных о модах сборки"))?;
+        .ok_or_else(|| anyhow!("{}", tr("Нет данных о модах сборки")))?;
 
     let mut coll_title = "Collection".to_string();
     let items = details.iter()
@@ -424,7 +426,7 @@ fn fetch_html(url: &str) -> Result<String> {
         .header("User-Agent", USER_AGENT)
         .header("Accept-Language", "en-US,en;q=0.9")
         .call()
-        .map_err(|e| anyhow!("HTTP ошибка: {e}"))?;
+        .map_err(|e| anyhow!("{}", trf!("HTTP ошибка: {e}", e)))?;
     Ok(resp.body_mut().with_config().limit(BODY_LIMIT).read_to_string()?)
 }
 
@@ -433,7 +435,7 @@ fn post_form(url: &str, body: &str) -> Result<Value> {
         .header("Content-Type", "application/x-www-form-urlencoded")
         .header("User-Agent", USER_AGENT)
         .send(body)
-        .map_err(|e| anyhow!("HTTP ошибка: {e}"))?;
+        .map_err(|e| anyhow!("{}", trf!("HTTP ошибка: {e}", e)))?;
     let text = resp.body_mut().with_config().limit(BODY_LIMIT).read_to_string()?;
     Ok(serde_json::from_str(&text)?)
 }
@@ -442,7 +444,7 @@ fn get_json(url: &str) -> Result<Value> {
     let mut resp = ureq::get(url)
         .header("User-Agent", USER_AGENT)
         .call()
-        .map_err(|e| anyhow!("HTTP ошибка: {e}"))?;
+        .map_err(|e| anyhow!("{}", trf!("HTTP ошибка: {e}", e)))?;
     let text = resp.body_mut().with_config().limit(BODY_LIMIT).read_to_string()?;
     Ok(serde_json::from_str(&text)?)
 }

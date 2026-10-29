@@ -312,7 +312,9 @@ fn emit_image(url: &str, opts: Options, out: &mut String) {
         out.push(')');
         return;
     }
-    out.push_str("[🖼 изображение](");
+    out.push_str("[🖼 ");
+    out.push_str(crate::i18n::tr("изображение"));
+    out.push_str("](");
     out.push_str(url);
     out.push(')');
 }

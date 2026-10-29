@@ -8,6 +8,8 @@ use crate::job::Job;
 use crate::mod_data::{ModDb, ModId};
 use crate::updates::Update;
 use crate::ui::{fit_width, theme};
+use crate::i18n::tr;
+use crate::trf;
 
 #[derive(Default)]
 pub struct UpdatesUi {
@@ -47,7 +49,7 @@ pub fn show(ctx: &egui::Context, state: &mut UpdatesUi, db: &ModDb) -> Reply {
     let mut reply = Reply::None;
     let mut open = true;
 
-    Window::new("⇧  Обновления модов")
+    Window::new(tr("⇧  Обновления модов"))
         .open(&mut open)
         .collapsible(true)
         .resizable(true)
@@ -69,16 +71,16 @@ fn body(ui: &mut egui::Ui, state: &mut UpdatesUi, db: &ModDb, reply: &mut Reply)
         Job::Idle => {
             ui.label(
                 RichText::new(
-                    "Свежесть мода определяется по времени его обновления в мастерской: \
+                    tr("Свежесть мода определяется по времени его обновления в мастерской: \
                      номеру версии из About.xml верить нельзя, авторы его почти не поднимают.\n\n\
                      Локальная сторона — время файлов на диске, поэтому проверка работает \
-                     и для модов, поставленных до этого лаунчера.",
+                     и для модов, поставленных до этого лаунчера."),
                 )
                 .color(theme::TEXT_MUTED)
                 .size(11.5),
             );
             ui.add_space(8.0);
-            if ui.button("Спросить мастерскую").clicked() {
+            if ui.button(tr("Спросить мастерскую")).clicked() {
                 *reply = Reply::Check;
             }
         }
@@ -86,14 +88,14 @@ fn body(ui: &mut egui::Ui, state: &mut UpdatesUi, db: &ModDb, reply: &mut Reply)
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label(
-                    RichText::new("Спрашиваем мастерскую…")
+                    RichText::new(tr("Спрашиваем мастерскую…"))
                         .color(theme::TEXT_PRIMARY)
                         .size(11.5),
                 );
             });
             ui.add_space(4.0);
             ui.label(
-                RichText::new("Моды спрашиваются сотнями за запрос; на большой сборке это секунд двадцать.")
+                RichText::new(tr("Моды спрашиваются сотнями за запрос; на большой сборке это секунд двадцать."))
                     .color(theme::TEXT_MUTED)
                     .size(10.5),
             );
@@ -101,18 +103,18 @@ fn body(ui: &mut egui::Ui, state: &mut UpdatesUi, db: &ModDb, reply: &mut Reply)
         Job::Failed(err) => {
             ui.label(RichText::new(format!("⚠ {err}")).color(theme::WARNING_AMBER).size(11.5));
             ui.add_space(6.0);
-            if ui.button("⟳ Ещё раз").clicked() {
+            if ui.button(tr("⟳ Ещё раз")).clicked() {
                 *reply = Reply::Check;
             }
         }
         Job::Done(updates) if updates.is_empty() => {
             ui.label(
-                RichText::new("Все моды из мастерской свежие.")
+                RichText::new(tr("Все моды из мастерской свежие."))
                     .color(theme::ACTIVE_GREEN)
                     .size(11.5),
             );
             ui.add_space(6.0);
-            if ui.button("⟳ Проверить ещё раз").clicked() {
+            if ui.button(tr("⟳ Проверить ещё раз")).clicked() {
                 *reply = Reply::Check;
             }
         }
@@ -127,19 +129,19 @@ fn found(ui: &mut egui::Ui, state: &mut UpdatesUi, db: &ModDb, reply: &mut Reply
 
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new(format!("Устарело модов: {}", updates.len()))
+            RichText::new(trf!("Устарело модов: {count}", count = updates.len()))
                 .color(theme::TEXT_PRIMARY)
                 .size(12.0)
                 .strong(),
         );
         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-            if ui.button("⟳").on_hover_text("Спросить заново").clicked() {
+            if ui.button("⟳").on_hover_text(tr("Спросить заново")).clicked() {
                 *reply = Reply::Check;
             }
-            if ui.button("Снять всё").clicked() {
+            if ui.button(tr("Снять всё")).clicked() {
                 state.chosen.clear();
             }
-            if ui.button("Отметить всё").clicked() {
+            if ui.button(tr("Отметить всё")).clicked() {
                 state.chosen = updates.iter().map(|u| u.id.clone()).collect();
             }
         });
@@ -163,10 +165,10 @@ fn found(ui: &mut egui::Ui, state: &mut UpdatesUi, db: &ModDb, reply: &mut Reply
         .filter(|u| state.chosen.contains(&u.id))
         .map(|u| u.workshop_id)
         .collect();
-    let label = format!("⬇ Обновить отмеченные ({})", chosen.len());
+    let label = trf!("⬇ Обновить отмеченные ({count})", count = chosen.len());
     if ui
         .add_enabled(!chosen.is_empty(), egui::Button::new(RichText::new(label).size(11.5)))
-        .on_hover_text("Поставить в очередь SteamCMD и открыть её")
+        .on_hover_text(tr("Поставить в очередь SteamCMD и открыть её"))
         .clicked()
     {
         *reply = Reply::Download(chosen);
@@ -224,7 +226,7 @@ fn row(
                         theme::TEXT_MUTED
                     };
                     ui.label(
-                        RichText::new(format!("отстал на {days} дн."))
+                        RichText::new(trf!("отстал на {days} дн.", days))
                             .color(color)
                             .size(10.5),
                     );

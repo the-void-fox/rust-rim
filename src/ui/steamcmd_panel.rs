@@ -4,6 +4,8 @@ use std::sync::mpsc;
 use crate::ui::theme;
 use crate::steam::steamcmd;
 use crate::ui::fit_width;
+use crate::i18n::tr;
+use crate::trf;
 
 const LOG_MAX: usize = 300;
 
@@ -74,7 +76,7 @@ impl SteamCmdPanel {
         let was_open = *open;
         let mut rescan = false;
 
-        egui::Window::new("⬇  Загрузка модов (SteamCMD)")
+        egui::Window::new(tr("⬇  Загрузка модов (SteamCMD)"))
             .open(open)
             .collapsible(false)
             .resizable(true)
@@ -112,12 +114,12 @@ impl SteamCmdPanel {
                     match ev {
                         steamcmd::InstallEvent::Log(msg) => pending_logs.push(msg),
                         steamcmd::InstallEvent::Done => {
-                            pending_logs.push("✓ SteamCMD установлен.".into());
+                            pending_logs.push(tr("✓ SteamCMD установлен.").into());
                             next_state = Some(State::Idle);
                             break;
                         }
                         steamcmd::InstallEvent::Error(e) => {
-                            pending_logs.push(format!("× Ошибка установки: {e}"));
+                            pending_logs.push(trf!("× Ошибка установки: {e}", e));
                             next_state = Some(State::Idle);
                             break;
                         }
@@ -130,26 +132,23 @@ impl SteamCmdPanel {
                     match ev {
                         steamcmd::DownloadEvent::Log(msg) => pending_logs.push(msg),
                         steamcmd::DownloadEvent::ItemStarted(id) => {
-                            pending_logs.push(format!("→ Скачиваем {id}…"));
+                            pending_logs.push(trf!("→ Скачиваем {id}…", id));
                         }
                         steamcmd::DownloadEvent::ItemDone(id) => {
                             *completed += 1;
-                            pending_logs.push(format!("✓ Скачан: {id}"));
+                            pending_logs.push(trf!("✓ Скачан: {id}", id));
                         }
                         steamcmd::DownloadEvent::ItemFailed(id) => {
                             failed.push(id);
-                            pending_logs.push(format!("× Ошибка: {id}"));
+                            pending_logs.push(trf!("× Ошибка: {id}", id));
                         }
                         steamcmd::DownloadEvent::Finished { failed: f } => {
                             let c = *completed;
                             let fv = f.clone();
                             let msg = if f.is_empty() {
-                                "✓ Все моды успешно скачаны!".into()
+                                tr("✓ Все моды успешно скачаны!").into()
                             } else {
-                                format!(
-                                    "⚠ Завершено. Не удалось скачать: {}",
-                                    f.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ")
-                                )
+                                trf!("⚠ Завершено. Не удалось скачать: {ids}", ids = f.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", "))
                             };
                             pending_logs.push(msg);
                             next_state = Some(State::Done { completed: c, failed: fv, rescan_triggered: false });
@@ -208,14 +207,14 @@ impl SteamCmdPanel {
                 ui.horizontal(|ui| {
                     if installed {
                         ui.label(
-                            RichText::new("● SteamCMD установлен")
+                            RichText::new(tr("● SteamCMD установлен"))
                                 .color(theme::ACTIVE_GREEN)
                                 .size(11.0),
                         );
                         if nixos {
                             ui.add_space(6.0);
                             ui.label(
-                                RichText::new("(системный, NixOS)")
+                                RichText::new(tr("(системный, NixOS)"))
                                     .color(theme::TEXT_MUTED)
                                     .size(10.0)
                                     .italics(),
@@ -234,28 +233,28 @@ impl SteamCmdPanel {
                         }
                     } else {
                         ui.label(
-                            RichText::new("○ SteamCMD не установлен")
+                            RichText::new(tr("○ SteamCMD не установлен"))
                                 .color(theme::WARNING_AMBER)
                                 .size(11.0),
                         );
                         ui.add_space(8.0);
                         if nixos {
                             ui.label(
-                                RichText::new("— NixOS: установите через  nix-shell -p steamcmd  или добавьте steamcmd в systemPackages")
+                                RichText::new(tr("— NixOS: установите через  nix-shell -p steamcmd  или добавьте steamcmd в systemPackages"))
                                     .color(theme::TEXT_MUTED)
                                     .size(10.5)
                                     .italics(),
                             );
                         } else if steamcmd_base.is_empty() {
                             ui.label(
-                                RichText::new("— укажите папку в Настройки → Пути")
+                                RichText::new(tr("— укажите папку в Настройки → Пути"))
                                     .color(theme::TEXT_MUTED)
                                     .size(10.5)
                                     .italics(),
                             );
                         } else if !is_busy {
                             let btn = egui::Button::new(
-                                RichText::new("  Установить  ")
+                                RichText::new(tr("  Установить  "))
                                     .color(theme::TEXT_PRIMARY)
                                     .size(11.0),
                             )
@@ -273,7 +272,7 @@ impl SteamCmdPanel {
                         ui.add_space(8.0);
                         ui.spinner();
                         ui.label(
-                            RichText::new("Установка…")
+                            RichText::new(tr("Установка…"))
                                 .color(theme::TEXT_MUTED)
                                 .size(11.0),
                         );
@@ -285,7 +284,7 @@ impl SteamCmdPanel {
 
         // ── Ввод Workshop ID ─────────────────────────────────────────────────
         ui.label(
-            RichText::new("Workshop ID (по одному на строку, через запятую или пробел):")
+            RichText::new(tr("Workshop ID (по одному на строку, через запятую или пробел):"))
                 .color(theme::TEXT_MUTED)
                 .size(11.0),
         );
@@ -309,7 +308,7 @@ impl SteamCmdPanel {
         ui.add_space(6.0);
         ui.checkbox(
             &mut self.validate,
-            RichText::new("Проверять целостность (validate)")
+            RichText::new(tr("Проверять целостность (validate)"))
                 .color(theme::TEXT_PRIMARY)
                 .size(11.0),
         );
@@ -321,7 +320,7 @@ impl SteamCmdPanel {
             let can_download = installed && !is_busy && !ids.is_empty();
 
             let dl_btn = egui::Button::new(
-                RichText::new("⬇  Скачать").color(theme::TEXT_PRIMARY).size(12.0),
+                RichText::new(tr("⬇  Скачать")).color(theme::TEXT_PRIMARY).size(12.0),
             )
             .fill(theme::HEADER_LEFT)
             .stroke(Stroke::new(1.0, theme::BORDER_ACCENT));
@@ -338,10 +337,7 @@ impl SteamCmdPanel {
                 }
                 self.log.clear();
                 if use_multi {
-                    self.push_log(format!(
-                        "Мульти-загрузка: {} параллельных процессов для {} мод(ов)",
-                        max_processes.min(total), total
-                    ));
+                    self.push_log(trf!("Мульти-загрузка: {procs} параллельных процессов для {total} мод(ов)", procs = max_processes.min(total), total));
                 }
                 self.state = State::Downloading {
                     total,
@@ -366,13 +362,10 @@ impl SteamCmdPanel {
             if let State::Done { completed, failed, .. } = &self.state {
                 ui.add_space(8.0);
                 let (text, color) = if failed.is_empty() {
-                    (format!("✓ Скачано: {completed}"), theme::ACTIVE_GREEN)
+                    (trf!("✓ Скачано: {completed}", completed), theme::ACTIVE_GREEN)
                 } else {
                     (
-                        format!(
-                            "⚠ Скачано: {completed}, ошибок: {}",
-                            failed.len()
-                        ),
+                        trf!("⚠ Скачано: {completed}, ошибок: {count}", completed, count = failed.len()),
                         theme::WARNING_AMBER,
                     )
                 };
@@ -386,8 +379,8 @@ impl SteamCmdPanel {
         if let State::Done { failed, .. } = &self.state
             && !failed.is_empty()
             && ui
-                .small_button("Оставить в списке только неудавшиеся")
-                .on_hover_text("Заменить список ID теми, что не скачались, — для повторной попытки")
+                .small_button(tr("Оставить в списке только неудавшиеся"))
+                .on_hover_text(tr("Заменить список ID теми, что не скачались, — для повторной попытки"))
                 .clicked()
         {
             keep_failed = Some(failed.clone());
@@ -409,7 +402,7 @@ impl SteamCmdPanel {
             false
         };
         if trigger_auto {
-            self.push_log("→ Перемещаем моды в папку локальных модов…".into());
+            self.push_log(tr("→ Перемещаем моды в папку локальных модов…").into());
             rescan = true;
         }
 
@@ -419,7 +412,7 @@ impl SteamCmdPanel {
                 if *completed > 0 {
                     ui.add_space(4.0);
                     let add_btn = egui::Button::new(
-                        RichText::new("⟳  Перенести в Mods и обновить список")
+                        RichText::new(tr("⟳  Перенести в Mods и обновить список"))
                             .color(theme::TEXT_PRIMARY)
                             .size(11.0),
                     )
@@ -428,7 +421,7 @@ impl SteamCmdPanel {
 
                     if ui
                         .add(add_btn)
-                        .on_hover_text("Переместить скачанные моды в папку RimWorld/Mods и пересканировать список")
+                        .on_hover_text(tr("Переместить скачанные моды в папку RimWorld/Mods и пересканировать список"))
                         .clicked()
                     {
                         rescan = true;
@@ -445,7 +438,7 @@ impl SteamCmdPanel {
         // ── Лог ─────────────────────────────────────────────────────────────
         ui.add_space(4.0);
         ui.label(
-            RichText::new("Вывод SteamCMD:")
+            RichText::new(tr("Вывод SteamCMD:"))
                 .color(theme::TEXT_MUTED)
                 .size(10.5)
                 .strong(),
@@ -465,7 +458,7 @@ impl SteamCmdPanel {
                     .show(ui, |ui| {
                         if self.log.is_empty() {
                             ui.label(
-                                RichText::new("(пусто)")
+                                RichText::new(tr("(пусто)"))
                                     .color(theme::TEXT_MUTED)
                                     .size(10.5)
                                     .italics(),

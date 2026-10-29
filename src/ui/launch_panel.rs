@@ -8,6 +8,8 @@ use egui::{Align, Frame, RichText, ScrollArea, Stroke, Window};
 
 use crate::process::Run;
 use crate::ui::{fit_width, theme};
+use crate::i18n::tr;
+use crate::trf;
 
 /// Что пользователь попросил сделать.
 #[derive(PartialEq, Eq)]
@@ -24,7 +26,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool, run: &Run) -> Reply {
     let mut reply = Reply::None;
     let mut window_open = true;
 
-    Window::new("▶  Запуск RimWorld")
+    Window::new(tr("▶  Запуск RimWorld"))
         .open(&mut window_open)
         .collapsible(true)
         .resizable(true)
@@ -53,32 +55,32 @@ fn status_row(ui: &mut egui::Ui, run: &Run, reply: &mut Reply) {
         if run.is_running() {
             ui.spinner();
             ui.label(
-                RichText::new(format!("Работает {secs} с"))
+                RichText::new(trf!("Работает {secs} с", secs))
                     .color(theme::ACTIVE_GREEN)
                     .size(12.0)
                     .strong(),
             );
         } else {
             let (mark, color, text) = match run.status().and_then(|s| s.code()) {
-                Some(0) => ("✓", theme::ACTIVE_GREEN, "Игра закрыта".to_string()),
-                Some(code) => ("×", theme::ERROR_RED, format!("Завершилась с кодом {code}")),
-                None => ("■", theme::TEXT_MUTED, "Процесс снят".to_string()),
+                Some(0) => ("✓", theme::ACTIVE_GREEN, tr("Игра закрыта").to_string()),
+                Some(code) => ("×", theme::ERROR_RED, trf!("Завершилась с кодом {code}", code)),
+                None => ("■", theme::TEXT_MUTED, tr("Процесс снят").to_string()),
             };
             ui.label(RichText::new(mark).color(color).size(12.0));
-            ui.label(RichText::new(format!("{text} • {secs} с")).color(color).size(12.0));
+            ui.label(RichText::new(trf!("{text} • {secs} с", text, secs)).color(color).size(12.0));
         }
 
         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
             if run.is_running()
                 && ui
-                    .button(RichText::new("⏹ Остановить").color(theme::ERROR_RED))
-                    .on_hover_text("Снять процесс игры")
+                    .button(RichText::new(tr("⏹ Остановить")).color(theme::ERROR_RED))
+                    .on_hover_text(tr("Снять процесс игры"))
                     .clicked()
             {
                 *reply = Reply::Kill;
             }
             ui.label(
-                RichText::new(format!("строк: {}", run.total_lines()))
+                RichText::new(trf!("строк: {total_lines}", total_lines = run.total_lines()))
                     .color(theme::TEXT_MUTED)
                     .size(10.5),
             );
@@ -99,7 +101,7 @@ fn log_view(ui: &mut egui::Ui, run: &Run) {
     let lines = run.lines();
     if lines.is_empty() {
         ui.label(
-            RichText::new("Вывода пока нет — Proton разворачивает окружение…")
+            RichText::new(tr("Вывода пока нет — Proton разворачивает окружение…"))
                 .color(theme::TEXT_MUTED)
                 .italics()
                 .size(11.0),
@@ -133,7 +135,7 @@ fn log_view(ui: &mut egui::Ui, run: &Run) {
 /// Подсветка по ключевым словам: в потоке Proton полезное тонет в шуме.
 fn line_color(line: &str) -> egui::Color32 {
     let lower = line.to_lowercase();
-    if lower.contains("err") || lower.contains("fail") || lower.contains("не удалось") {
+    if lower.contains("err") || lower.contains("fail") || lower.contains(tr("не удалось")) {
         theme::ERROR_RED
     } else if lower.contains("warn") {
         theme::WARNING_AMBER

@@ -22,6 +22,7 @@ use crate::ui::theme;
 use browse::Browse;
 use collections::Collections;
 use queue::Queue;
+use crate::i18n::tr;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum Tab {
@@ -68,7 +69,7 @@ impl WorkshopBrowser {
         }
 
         let mut result = None;
-        egui::Window::new("⚒  Steam Workshop — Браузер модов")
+        egui::Window::new(tr("⚒  Steam Workshop — Браузер модов"))
             .open(open)
             .collapsible(false)
             .resizable(true)
@@ -92,10 +93,10 @@ impl WorkshopBrowser {
             .inner_margin(Margin::symmetric(8, 4))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if browse::tab_btn(ui, "▣  Моды", self.tab == Tab::Mods) {
+                    if browse::tab_btn(ui, tr("▣  Моды"), self.tab == Tab::Mods) {
                         self.tab = Tab::Mods;
                     }
-                    if browse::tab_btn(ui, "▤  Сборки", self.tab == Tab::Collections) {
+                    if browse::tab_btn(ui, tr("▤  Сборки"), self.tab == Tab::Collections) {
                         self.tab = Tab::Collections;
                     }
                 });

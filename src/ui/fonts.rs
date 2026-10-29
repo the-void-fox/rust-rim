@@ -15,6 +15,13 @@ use egui::{FontData, FontDefinitions, FontFamily};
 /// Основной шрифт: кириллица, латиница и CJK в одном файле.
 const NOTO_SANS_SC: &[u8] = include_bytes!("../assets/NotoSansSC.ttf");
 
+/// Запасные для украинских «і ї є ґ»: в NotoSansSC их нет. Стоят вторыми,
+/// сразу за основным: в конце списка egui до них не доходит (проверено
+/// `has_glyph`). NotoSans — та же гарнитура, что у основного, поэтому буквы
+/// не выбиваются из слова; FiraCode — для моноширинного текста.
+const NOTO_SANS: &[u8] = include_bytes!("../assets/NotoSans.ttf");
+const FIRA_CODE: &[u8] = include_bytes!("../assets/FiraCode.ttf");
+
 /// Шрифты приложения: встроенные в egui плюс наш основной первым в списке.
 ///
 /// Порядок важен: egui берёт глиф из первого шрифта семейства, где он есть,
@@ -26,12 +33,15 @@ pub fn definitions() -> FontDefinitions {
         "NotoSansSC".to_owned(),
         FontData::from_static(NOTO_SANS_SC).into(),
     );
-    for family in [FontFamily::Proportional, FontFamily::Monospace] {
-        fonts
-            .families
-            .entry(family)
-            .or_default()
-            .insert(0, "NotoSansSC".to_owned());
+    fonts.font_data.insert("NotoSans".to_owned(), FontData::from_static(NOTO_SANS).into());
+    fonts.font_data.insert("FiraCode".to_owned(), FontData::from_static(FIRA_CODE).into());
+    for (family, fallback) in [
+        (FontFamily::Proportional, "NotoSans"),
+        (FontFamily::Monospace, "FiraCode"),
+    ] {
+        let list = fonts.families.entry(family).or_default();
+        list.insert(0, "NotoSansSC".to_owned());
+        list.insert(1, fallback.to_owned());
     }
     fonts
 }

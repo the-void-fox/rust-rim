@@ -8,6 +8,8 @@ use crate::log_analysis::{analyze, LogIssue, ModIndex, Severity};
 use crate::mod_data::{ModDb, ModEntry, ModId, Profile};
 use crate::ui::theme;
 use crate::ui::fit_width;
+use crate::i18n::tr;
+use crate::trf;
 
 /// Логи больше этого размера читаются с хвоста (старое обрезается).
 const MAX_LOG_BYTES: usize = 32 * 1024 * 1024;
@@ -69,7 +71,7 @@ impl LogPanel {
         }
 
         let mut selected: Option<ModId> = None;
-        egui::Window::new("☰  Анализ логов RimWorld")
+        egui::Window::new(tr("☰  Анализ логов RimWorld"))
             .open(open)
             .collapsible(false)
             .resizable(true)
@@ -93,7 +95,7 @@ impl LogPanel {
         self.expanded.clear();
         self.job = Job::spawn(move || {
             let bytes = std::fs::read(&path)
-                .map_err(|e| format!("Не удалось прочитать {}: {e}", path.display()))?;
+                .map_err(|e| trf!("Не удалось прочитать {display}: {e}", display = path.display(), e))?;
             let start = bytes.len().saturating_sub(MAX_LOG_BYTES);
             let text = String::from_utf8_lossy(&bytes[start..]);
             // Индекс строится здесь же: скан Assemblies/ — дисковый ввод-вывод
@@ -116,8 +118,8 @@ impl LogPanel {
         ui.horizontal(|ui| {
             let path_label = self.path.as_ref()
                 .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "лог не найден — выберите файл".to_string());
-            ui.label(RichText::new("Файл:").color(theme::TEXT_MUTED).size(11.0));
+                .unwrap_or_else(|| tr("лог не найден — выберите файл").to_string());
+            ui.label(RichText::new(tr("Файл:")).color(theme::TEXT_MUTED).size(11.0));
             ui.add(
                 egui::Label::new(RichText::new(&path_label).color(theme::TEXT_PRIMARY).size(11.0))
                     .truncate(),
@@ -128,14 +130,14 @@ impl LogPanel {
                 if busy {
                     ui.spinner();
                 }
-                if ui.add_enabled(!busy && self.path.is_some(), egui::Button::new("⟳ Обновить"))
+                if ui.add_enabled(!busy && self.path.is_some(), egui::Button::new(tr("⟳ Обновить")))
                     .clicked()
                 {
                     self.start_analysis(db, profile);
                 }
-                if ui.button("▤ Выбрать…").clicked() {
+                if ui.button(tr("▤ Выбрать…")).clicked() {
                     let mut dlg = rfd::FileDialog::new()
-                        .add_filter("Логи", &["log", "txt"]);
+                        .add_filter(tr("Логи"), &["log", "txt"]);
                     if let Some(dir) = self.path.as_ref().and_then(|p| p.parent()) {
                         dlg = dlg.set_directory(dir);
                     }
@@ -150,9 +152,9 @@ impl LogPanel {
 
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.only_with_suspects,
-                RichText::new("Только с подозреваемыми").size(11.0));
+                RichText::new(tr("Только с подозреваемыми")).size(11.0));
             ui.checkbox(&mut self.show_warnings,
-                RichText::new("Показывать предупреждения").size(11.0));
+                RichText::new(tr("Показывать предупреждения")).size(11.0));
 
             if let Some(issues) = self.job.result() {
                 let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
@@ -172,14 +174,14 @@ impl LogPanel {
             Job::Idle => {
                 ui.add_space(20.0);
                 ui.vertical_centered(|ui| {
-                    ui.label(RichText::new("Выберите файл лога (Player.log)")
+                    ui.label(RichText::new(tr("Выберите файл лога (Player.log)"))
                         .color(theme::TEXT_MUTED).italics());
                 });
             }
             Job::Running(_) => {
                 ui.add_space(20.0);
                 ui.vertical_centered(|ui| {
-                    ui.label(RichText::new("Анализ лога…").color(theme::TEXT_MUTED));
+                    ui.label(RichText::new(tr("Анализ лога…")).color(theme::TEXT_MUTED));
                 });
             }
             Job::Failed(e) => {
@@ -195,7 +197,7 @@ impl LogPanel {
                 if issues.is_empty() {
                     ui.add_space(20.0);
                     ui.vertical_centered(|ui| {
-                        ui.label(RichText::new("Ошибок не найдено ★")
+                        ui.label(RichText::new(tr("Ошибок не найдено ★"))
                             .color(theme::ACTIVE_GREEN));
                     });
                 } else {
@@ -261,7 +263,7 @@ fn draw_issue(
                     if ui.small_button(expand_label).clicked() {
                         *toggle = Some(idx);
                     }
-                    if expanded && ui.small_button("⎘").on_hover_text("Скопировать текст").clicked() {
+                    if expanded && ui.small_button("⎘").on_hover_text(tr("Скопировать текст")).clicked() {
                         ui.ctx().copy_text(issue.full_text.clone());
                     }
                 });
@@ -277,7 +279,7 @@ fn draw_issue(
             if !issue.suspects.is_empty() {
                 ui.add_space(3.0);
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("Подозреваемые:")
+                    ui.label(RichText::new(tr("Подозреваемые:"))
                         .color(theme::TEXT_MUTED).size(10.5));
                     for s in &issue.suspects {
                         let color = if s.score >= 5 {
@@ -290,16 +292,13 @@ fn draw_issue(
                         let label = if s.is_active {
                             s.name.clone()
                         } else {
-                            format!("{} (неактивен)", s.name)
+                            trf!("{name} (неактивен)", name = s.name)
                         };
                         let btn = egui::Button::new(
                             RichText::new(label).color(color).size(10.5))
                             .fill(theme::BG_DARK)
                             .stroke(Stroke::new(1.0, color.gamma_multiply(0.4)));
-                        let tooltip = format!(
-                            "{}\nсчёт: {}\n{}",
-                            s.package_id, s.score, s.evidence.join("\n"),
-                        );
+                        let tooltip = trf!("{package_id}\nсчёт: {score}\n{evidence}", package_id = s.package_id, score = s.score, evidence = s.evidence.join("\n"));
                         if ui.add(btn).on_hover_text(tooltip).clicked() {
                             selected = Some(s.package_id.clone());
                         }
@@ -307,8 +306,7 @@ fn draw_issue(
                 });
             } else if let Some(hint) = &issue.harmony_hint {
                 ui.add_space(3.0);
-                ui.label(RichText::new(format!(
-                    "След Harmony-патча: виновник среди модов, патчащих {hint}"))
+                ui.label(RichText::new(trf!("След Harmony-патча: виновник среди модов, патчащих {hint}", hint))
                     .color(theme::TEXT_MUTED).size(10.5).italics());
             }
 

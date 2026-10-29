@@ -12,6 +12,8 @@ use crate::steam::workshop_api::{self, CollectionItem, SortOrder, WorkshopItem};
 use crate::ui::{fit_width, theme};
 
 use super::image_cache::ImageCache;
+use crate::i18n::tr;
+use crate::trf;
 
 /// Элемент выдачи. Общего кода на моды и сборки ровно столько: список должен
 /// уметь заказать превью, не зная, что именно показывает.
@@ -163,7 +165,7 @@ pub fn search_bar<T: Card + Clone + Send + 'static>(
                 );
                 let search = ui
                     .button(RichText::new("⊙").size(12.0))
-                    .on_hover_text("Найти")
+                    .on_hover_text(tr("Найти"))
                     .clicked()
                     || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
                 if search {
@@ -176,12 +178,12 @@ pub fn search_bar<T: Card + Clone + Send + 'static>(
                     browse.page = 1;
                     refetch = true;
                 }
-                if tag_combo(ui, &format!("{id_salt}_ver"), "Любая версия", workshop_api::GAME_VERSIONS, &mut browse.version) {
+                if tag_combo(ui, &format!("{id_salt}_ver"), tr("Любая версия"), workshop_api::GAME_VERSIONS, &mut browse.version) {
                     browse.page = 1;
                     refetch = true;
                 }
                 if browse.show_kind
-                    && tag_combo(ui, &format!("{id_salt}_kind"), "Любой тип", workshop_api::ITEM_KINDS, &mut browse.kind)
+                    && tag_combo(ui, &format!("{id_salt}_kind"), tr("Любой тип"), workshop_api::ITEM_KINDS, &mut browse.kind)
                 {
                     browse.page = 1;
                     refetch = true;
@@ -247,7 +249,7 @@ pub fn results(
                 ui.add_space(40.0);
                 ui.vertical_centered(|ui| {
                     ui.label(
-                        RichText::new("Ничего не найдено")
+                        RichText::new(tr("Ничего не найдено"))
                             .color(theme::TEXT_MUTED)
                             .size(12.0)
                             .italics(),
@@ -381,7 +383,7 @@ fn pagination(ui: &mut egui::Ui, page: &mut u32, has_prev: bool, has_next: bool)
         *page -= 1;
         changed = true;
     }
-    ui.label(RichText::new(format!("  стр {page}  ")).color(theme::TEXT_MUTED).size(11.0));
+    ui.label(RichText::new(trf!("  стр {page}  ", page)).color(theme::TEXT_MUTED).size(11.0));
     let forward = egui::Button::new(RichText::new("▶").color(theme::TEXT_MUTED).size(11.0));
     if ui.add_enabled(has_next, forward).clicked() {
         *page += 1;

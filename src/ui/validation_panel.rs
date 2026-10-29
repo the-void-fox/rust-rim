@@ -5,6 +5,8 @@ use egui::{Align, Frame, Margin, RichText, ScrollArea, Stroke, Window};
 use crate::mod_data::{ModDb, ModId, Profile};
 use crate::ui::{fit_width, theme};
 use crate::validation::{self, Diagnostic, Fix, Severity};
+use crate::i18n::tr;
+use crate::trf;
 
 #[derive(Default)]
 pub struct ValidationUi {
@@ -57,7 +59,7 @@ pub fn show(ctx: &egui::Context, state: &mut ValidationUi, db: &ModDb) -> Reply 
     let mut reply = Reply::None;
     let mut open = true;
 
-    Window::new("✓  Проверка сборки")
+    Window::new(tr("✓  Проверка сборки"))
         .open(&mut open)
         .collapsible(false)
         .resizable(true)
@@ -98,13 +100,13 @@ fn header(ui: &mut egui::Ui, state: &mut ValidationUi) {
         ui.add_space(12.0);
         ui.checkbox(
             &mut state.show_warnings,
-            RichText::new("Показывать предупреждения").size(11.0),
+            RichText::new(tr("Показывать предупреждения")).size(11.0),
         );
     });
     ui.add_space(2.0);
     ui.label(
         RichText::new(
-            "Проверяется текущий порядок загрузки — тот, который уйдёт в ModsConfig.xml.",
+            tr("Проверяется текущий порядок загрузки — тот, который уйдёт в ModsConfig.xml."),
         )
         .color(theme::TEXT_MUTED)
         .size(10.5)
@@ -123,7 +125,7 @@ fn body(ui: &mut egui::Ui, state: &mut ValidationUi, db: &ModDb, reply: &mut Rep
         ui.add_space(20.0);
         ui.vertical_centered(|ui| {
             ui.label(
-                RichText::new("Проблем не найдено ★")
+                RichText::new(tr("Проблем не найдено ★"))
                     .color(theme::ACTIVE_GREEN)
                     .size(13.0),
             );
@@ -175,7 +177,7 @@ fn draw_diagnostic(ui: &mut egui::Ui, diag: &Diagnostic, db: &ModDb, reply: &mut
                         }
                     }
                     if let Some(id) = diag.mods.first() {
-                        if db.contains(id) && ui.button("Показать").clicked() {
+                        if db.contains(id) && ui.button(tr("Показать")).clicked() {
                             *reply = Reply::Select(id.clone());
                         }
                     }
@@ -198,9 +200,9 @@ fn fix_label(fix: &Fix, db: &ModDb) -> String {
         db.get(id).map(|m| m.name.clone()).unwrap_or_else(|| id.to_string())
     };
     match fix {
-        Fix::Activate(id) => format!("Включить «{}»", name(id)),
-        Fix::Deactivate(id) => format!("Выключить «{}»", name(id)),
-        Fix::Sort => "Сортировать".to_string(),
-        Fix::Download(_) => "⬇ Скачать".to_string(),
+        Fix::Activate(id) => trf!("Включить «{name}»", name = name(id)),
+        Fix::Deactivate(id) => trf!("Выключить «{name}»", name = name(id)),
+        Fix::Sort => tr("Сортировать").to_string(),
+        Fix::Download(_) => tr("⬇ Скачать").to_string(),
     }
 }

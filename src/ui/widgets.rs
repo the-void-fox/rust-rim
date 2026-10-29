@@ -3,6 +3,7 @@
 use egui::{Align, Color32, Frame, Layout, Margin, RichText, Sense, Stroke, Vec2};
 
 use crate::ui::theme;
+use crate::i18n::tr;
 
 /// Доступная ширина, никогда не отрицательная.
 ///
@@ -62,7 +63,7 @@ pub fn tag_chips(ui: &mut egui::Ui, tags: &crate::tags::Tags, selected: &mut Opt
         .inner_margin(Margin::symmetric(8, 4))
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Теги:").color(theme::TEXT_MUTED).size(11.0));
+                ui.label(RichText::new(tr("Теги:")).color(theme::TEXT_MUTED).size(11.0));
                 for id in tags.ids() {
                     let Some(tag) = tags.get(id) else { continue };
                     let key = tag.name.to_lowercase();
@@ -78,7 +79,7 @@ pub fn tag_chips(ui: &mut egui::Ui, tags: &crate::tags::Tags, selected: &mut Opt
                     } else {
                         btn.fill(theme::BG_DARK).stroke(Stroke::new(1.0, color.gamma_multiply(0.6)))
                     };
-                    if ui.add(btn).on_hover_text("Показать только моды с этим тегом").clicked() {
+                    if ui.add(btn).on_hover_text(tr("Показать только моды с этим тегом")).clicked() {
                         *selected = if on { None } else { Some(key) };
                     }
                 }
@@ -95,7 +96,7 @@ pub fn search_bar(ui: &mut egui::Ui, query: &mut String, id: &str) {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("⊙").size(12.0).color(theme::TEXT_MUTED));
                 let edit = egui::TextEdit::singleline(query)
-                    .hint_text("Поиск… (tag:имя — по тегу)")
+                    .hint_text(tr("Поиск… (tag:имя — по тегу)"))
                     .id(egui::Id::new(id))
                     .frame(Frame::NONE)
                     .desired_width(f32::INFINITY)

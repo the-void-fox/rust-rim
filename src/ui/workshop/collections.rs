@@ -10,6 +10,8 @@ use crate::ui::{fit_width_minus, theme};
 
 use super::browse::{self, Browse, Card};
 use super::queue::Queue;
+use crate::i18n::tr;
+use crate::trf;
 
 /// Состояние вкладки: выдача плюс скачивание содержимого одной сборки.
 pub struct Collections {
@@ -57,7 +59,7 @@ impl Collections {
         // Название берём из карточки: API его не возвращает.
         let title = self.downloading.take().map(|(_, t)| t).unwrap_or_default();
         match std::mem::replace(&mut self.job, Job::Idle) {
-            Job::Failed(e) => self.notice = Some(format!("× Ошибка: {e}")),
+            Job::Failed(e) => self.notice = Some(trf!("× Ошибка: {e}", e)),
             Job::Done((_api_title, items)) => {
                 let saved = save_collection_file(&title, &items);
                 let added = items
@@ -72,10 +74,8 @@ impl Collections {
                 let file = saved
                     .as_ref()
                     .map(|p| p.file_name().unwrap_or_default().to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "не сохранено".into());
-                self.notice = Some(format!(
-                    "✓ Сборка «{title}»\n  В очередь добавлено: {count} мод(ов)\n  Файл: {file}"
-                ));
+                    .unwrap_or_else(|| tr("не сохранено").into());
+                self.notice = Some(trf!("✓ Сборка «{title}»\n  В очередь добавлено: {count} мод(ов)\n  Файл: {file}", title, count, file));
             }
             other => self.job = other,
         }
@@ -100,7 +100,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut Collections, reserved_height: f32) {
     if browse::search_bar(
         ui,
         &mut state.browse,
-        "Поиск сборок RimWorld...",
+        tr("Поиск сборок RimWorld..."),
         "wsbrowser_coll",
         busy,
     ) {
@@ -129,7 +129,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut Collections, reserved_height: f32) {
         height,
         status,
         items.len(),
-        "Нажмите ⊙ для просмотра популярных сборок",
+        tr("Нажмите ⊙ для просмотра популярных сборок"),
         |ui, i| {
             if let Some(pick) = card(ui, &items[i], state) {
                 requested = Some(pick);
@@ -186,8 +186,8 @@ fn card(
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(
-                        "Нажмите «Скачать сборку» чтобы добавить не установленные моды \
-                         в очередь и сохранить список",
+                        tr("Нажмите «Скачать сборку» чтобы добавить не установленные моды \
+                         в очередь и сохранить список"),
                     )
                     .color(theme::TEXT_MUTED)
                     .size(10.0)
@@ -198,16 +198,16 @@ fn card(
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if is_downloading {
                     ui.spinner();
-                    ui.label(RichText::new("Загрузка...").color(theme::TEXT_MUTED).size(11.0));
+                    ui.label(RichText::new(tr("Загрузка...")).color(theme::TEXT_MUTED).size(11.0));
                 } else {
                     let btn = egui::Button::new(
-                        RichText::new("⬇ Скачать сборку").color(theme::TEXT_PRIMARY).size(11.0),
+                        RichText::new(tr("⬇ Скачать сборку")).color(theme::TEXT_PRIMARY).size(11.0),
                     )
                     .fill(theme::HEADER_LEFT)
                     .stroke(Stroke::new(1.0, theme::BORDER_ACCENT));
                     if ui
                         .add_enabled(!busy, btn)
-                        .on_hover_text("Добавить не установленные моды в очередь и сохранить список")
+                        .on_hover_text(tr("Добавить не установленные моды в очередь и сохранить список"))
                         .clicked()
                     {
                         consumed = true;

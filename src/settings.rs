@@ -43,6 +43,9 @@ pub struct AppSettings {
     /// хосты, и выбор мода в списке превращался бы в сетевой запрос к ним.
     #[serde(default)]
     pub load_remote_images: bool,
+    /// Язык интерфейса; `None` — как в системе.
+    #[serde(default)]
+    pub language: Option<crate::i18n::Lang>,
     /// Ключ Steam Web API: запасной путь поиска по мастерской, когда Steam
     /// в очередной раз переделывает страницу. Необязателен.
     #[serde(default)]
@@ -75,6 +78,7 @@ impl Default for AppSettings {
             log_file_path: String::new(),
             load_remote_images: false,
             steam_api_key: String::new(),
+            language: None,
             launch: LaunchSettings::default(),
             active_tab: SettingsTab::default(),
             api_key_check: Job::Idle,
@@ -107,6 +111,11 @@ impl AppSettings {
         self.log_file_path = crate::game::paths::player_log(&prefix.data_dir)
             .to_string_lossy()
             .into_owned();
+    }
+
+    /// Включает выбранный язык интерфейса.
+    pub fn apply_language(&self) {
+        crate::i18n::set_lang(self.language.unwrap_or_else(crate::i18n::Lang::detect));
     }
 
     /// Заданы ли пути, без которых приложению нечего показывать.

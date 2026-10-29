@@ -6,6 +6,8 @@ use crate::bisect::{Attempt, Hunt, Kind, Target};
 use crate::mod_data::{ModDb, ModId};
 use crate::testing::Phase;
 use crate::ui::{fit_width, test_panel, theme};
+use crate::i18n::tr;
+use crate::trf;
 
 #[derive(Default)]
 pub struct BisectUi {
@@ -29,7 +31,7 @@ pub fn show(ctx: &egui::Context, state: &mut BisectUi, hunt: Option<&Hunt>, db: 
     let mut reply = Reply::None;
     let mut open = true;
 
-    Window::new("⚖  Поиск виновника")
+    Window::new(tr("⚖  Поиск виновника"))
         .open(&mut open)
         .collapsible(true)
         .resizable(true)
@@ -52,13 +54,13 @@ pub fn show(ctx: &egui::Context, state: &mut BisectUi, hunt: Option<&Hunt>, db: 
 fn intro(ui: &mut egui::Ui) {
     ui.label(
         RichText::new(
-            "Поиск запускает игру снова и снова, каждый раз с урезанной сборкой, \
+            tr("Поиск запускает игру снова и снова, каждый раз с урезанной сборкой, \
              и оставляет только то, без чего поломка пропадает.\n\n\
              Деления пополам недостаточно: в RimWorld ломается обычно пара модов, \
              которые по отдельности безобидны, — такую пару половинчатый поиск \
              просто теряет. Поэтому перебираются и части сборки, и дополнения к ним.\n\n\
              Каждый прогон — это минуты. Начинать стоит после того, как обычный \
-             тест уже показал провал.",
+             тест уже показал провал."),
         )
         .color(theme::TEXT_MUTED)
         .size(11.5),
@@ -87,11 +89,7 @@ fn header(ui: &mut egui::Ui, hunt: &Hunt, reply: &mut Reply) {
     ui.horizontal(|ui| {
         let left = hunt.search().result().len();
         ui.label(
-            RichText::new(format!(
-                "Сужено: {} → {left} мод(ов) • прогонов: {}",
-                hunt.started_with(),
-                hunt.search().runs(),
-            ))
+            RichText::new(trf!("Сужено: {started_with} → {left} мод(ов) • прогонов: {runs}", started_with = hunt.started_with(), left, runs = hunt.search().runs()))
             .color(theme::TEXT_PRIMARY)
             .size(12.0)
             .strong(),
@@ -100,8 +98,8 @@ fn header(ui: &mut egui::Ui, hunt: &Hunt, reply: &mut Reply) {
         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
             if !hunt.is_done()
                 && ui
-                    .button(RichText::new("⏹ Остановить").color(theme::ERROR_RED))
-                    .on_hover_text("Прекратить поиск, оставив найденное приближение")
+                    .button(RichText::new(tr("⏹ Остановить")).color(theme::ERROR_RED))
+                    .on_hover_text(tr("Прекратить поиск, оставив найденное приближение"))
                     .clicked()
             {
                 *reply = Reply::Cancel;
@@ -111,8 +109,8 @@ fn header(ui: &mut egui::Ui, hunt: &Hunt, reply: &mut Reply) {
 
     ui.add_space(2.0);
     let target = match hunt.target() {
-        Target::AnyFailure => "Ищем: любой провал прогона".to_string(),
-        Target::Issue(title) => format!("Ищем: {title}"),
+        Target::AnyFailure => tr("Ищем: любой провал прогона").to_string(),
+        Target::Issue(title) => trf!("Ищем: {title}", title),
     };
     ui.add(
         egui::Label::new(RichText::new(target).color(theme::TEXT_MUTED).size(10.5)).truncate(),
@@ -125,12 +123,7 @@ fn current(ui: &mut egui::Ui, hunt: &Hunt) {
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label(
-                    RichText::new(format!(
-                        "{} • сборка из {} мод(ов) • {} с",
-                        test_panel::phase_text(run.phase()),
-                        run.active().len(),
-                        run.elapsed().as_secs(),
-                    ))
+                    RichText::new(trf!("{status} • сборка из {count} мод(ов) • {secs} с", status = test_panel::phase_text(run.phase()), count = run.active().len(), secs = run.elapsed().as_secs()))
                     .color(theme::TEXT_PRIMARY)
                     .size(11.5),
                 );
@@ -138,7 +131,7 @@ fn current(ui: &mut egui::Ui, hunt: &Hunt) {
             if matches!(run.phase(), Phase::Starting) {
                 ui.add_space(2.0);
                 ui.label(
-                    RichText::new("Первую минуту лога нет — Proton поднимает окружение.")
+                    RichText::new(tr("Первую минуту лога нет — Proton поднимает окружение."))
                         .color(theme::TEXT_MUTED)
                         .size(10.5),
                 );
@@ -148,7 +141,7 @@ fn current(ui: &mut egui::Ui, hunt: &Hunt) {
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label(
-                    RichText::new("Готовим следующий прогон…")
+                    RichText::new(tr("Готовим следующий прогон…"))
                         .color(theme::TEXT_MUTED)
                         .size(11.5),
                 );
@@ -162,7 +155,7 @@ fn result(ui: &mut egui::Ui, hunt: &Hunt, db: &ModDb, reply: &mut Reply) {
 
     if hunt.was_cancelled() {
         ui.label(
-            RichText::new("Поиск остановлен. Ниже — то, до чего успели сузить.")
+            RichText::new(tr("Поиск остановлен. Ниже — то, до чего успели сузить."))
                 .color(theme::TEXT_MUTED)
                 .size(11.0),
         );
@@ -172,9 +165,9 @@ fn result(ui: &mut egui::Ui, hunt: &Hunt, db: &ModDb, reply: &mut Reply) {
     if found.is_empty() {
         ui.label(
             RichText::new(
-                "Сузить не удалось: проблема не воспроизвелась ни на одном урезанном \
+                tr("Сузить не удалось: проблема не воспроизвелась ни на одном урезанном \
                  наборе. Так бывает, когда поломка зависит от чего-то помимо состава \
-                 сборки — от сохранения, настроек мода или просто от везения.",
+                 сборки — от сохранения, настроек мода или просто от везения."),
             )
             .color(theme::WARNING_AMBER)
             .size(11.0),
@@ -183,17 +176,17 @@ fn result(ui: &mut egui::Ui, hunt: &Hunt, db: &ModDb, reply: &mut Reply) {
     }
 
     let verdict = if found.len() == 1 {
-        "Виновник найден".to_string()
+        tr("Виновник найден").to_string()
     } else {
-        format!("Виновны вместе: {} мод(ов)", found.len())
+        trf!("Виновны вместе: {count} мод(ов)", count = found.len())
     };
     ui.label(RichText::new(verdict).color(theme::ACTIVE_GREEN).size(12.0).strong());
     ui.add_space(2.0);
     if found.len() > 1 {
         ui.label(
             RichText::new(
-                "По отдельности они, скорее всего, безобидны — проблема возникает \
-                 только когда включены все сразу.",
+                tr("По отдельности они, скорее всего, безобидны — проблема возникает \
+                 только когда включены все сразу."),
             )
             .color(theme::TEXT_MUTED)
             .size(10.5),
@@ -243,8 +236,8 @@ fn result(ui: &mut egui::Ui, hunt: &Hunt, db: &ModDb, reply: &mut Reply) {
 
     ui.add_space(4.0);
     if ui
-        .button(RichText::new("Выключить найденные").color(theme::ERROR_RED).size(11.5))
-        .on_hover_text("Убрать эти моды из активной сборки")
+        .button(RichText::new(tr("Выключить найденные")).color(theme::ERROR_RED).size(11.5))
+        .on_hover_text(tr("Убрать эти моды из активной сборки"))
         .clicked()
     {
         *reply = Reply::Deactivate(found.clone());
@@ -253,12 +246,9 @@ fn result(ui: &mut egui::Ui, hunt: &Hunt, db: &ModDb, reply: &mut Reply) {
     if hunt.off_target() > 0 {
         ui.add_space(6.0);
         ui.label(
-            RichText::new(format!(
-                "Осторожно: {} прогон(ов) провалились по другой причине, а не по искомой. \
+            RichText::new(trf!("Осторожно: {off_target} прогон(ов) провалились по другой причине, а не по искомой. \
                  Такие считаются «чисто», и из-за них поиск мог свернуть не туда — \
-                 проверьте результат вручную.",
-                hunt.off_target(),
-            ))
+                 проверьте результат вручную.", off_target = hunt.off_target()))
             .color(theme::WARNING_AMBER)
             .size(10.5),
         );
@@ -267,7 +257,7 @@ fn result(ui: &mut egui::Ui, hunt: &Hunt, db: &ModDb, reply: &mut Reply) {
 
 fn journal(ui: &mut egui::Ui, attempts: &[Attempt]) {
     ui.label(
-        RichText::new("Прогоны")
+        RichText::new(tr("Прогоны"))
             .color(theme::TEXT_MUTED)
             .size(10.5)
             .strong(),
@@ -291,18 +281,12 @@ fn journal(ui: &mut egui::Ui, attempts: &[Attempt]) {
                             ("✓", theme::ACTIVE_GREEN)
                         };
                         let outcome = if attempt.reproduced {
-                            "воспроизвелось"
+                            tr("воспроизвелось")
                         } else {
-                            "чисто"
+                            tr("чисто")
                         };
                         ui.label(
-                            RichText::new(format!(
-                                "{mark} #{}  {} мод(ов), {} — {outcome} ({})",
-                                n + 1,
-                                attempt.size,
-                                kind_text(attempt.kind),
-                                test_panel::verdict_text(&attempt.verdict),
-                            ))
+                            RichText::new(trf!("{mark} #{n}  {size} мод(ов), {kind} — {outcome} ({verdict})", mark, n = n + 1, size = attempt.size, kind = kind_text(attempt.kind), outcome, verdict = test_panel::verdict_text(&attempt.verdict)))
                             .color(color)
                             .size(10.0)
                             .monospace(),
@@ -315,9 +299,9 @@ fn journal(ui: &mut egui::Ui, attempts: &[Attempt]) {
 /// Откуда взялся набор.
 fn kind_text(kind: Kind) -> &'static str {
     match kind {
-        Kind::Hint => "подозреваемые из лога",
-        Kind::Part => "часть сборки",
-        Kind::Rest => "всё, кроме части",
-        Kind::Recheck => "проверка без подсказки",
+        Kind::Hint => tr("подозреваемые из лога"),
+        Kind::Part => tr("часть сборки"),
+        Kind::Rest => tr("всё, кроме части"),
+        Kind::Recheck => tr("проверка без подсказки"),
     }
 }

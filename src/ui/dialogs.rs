@@ -5,6 +5,8 @@ use crate::job::Job;
 use crate::settings::{AppSettings, SettingsTab};
 use crate::ui::theme;
 use crate::ui::{fit_width, fit_width_minus};
+use crate::i18n::{tr, Lang};
+use crate::trf;
 
 /// Открывает нативный диалог выбора папки и возвращает путь как строку.
 fn pick_folder(title: &str) -> Option<String> {
@@ -27,8 +29,8 @@ fn modlist_dir() -> Option<std::path::PathBuf> {
 pub fn pick_open_file(title: &str) -> Option<std::path::PathBuf> {
     let mut dlg = rfd::FileDialog::new()
         .set_title(title)
-        .add_filter("Список модов RimWorld", &["xml", "rml", "rws"])
-        .add_filter("Все файлы", &["*"]);
+        .add_filter(tr("Список модов RimWorld"), &["xml", "rml", "rws"])
+        .add_filter(tr("Все файлы"), &["*"]);
     if let Some(dir) = modlist_dir() {
         dlg = dlg.set_directory(dir);
     }
@@ -39,7 +41,7 @@ pub fn pick_open_file(title: &str) -> Option<std::path::PathBuf> {
 pub fn pick_save_file(title: &str) -> Option<std::path::PathBuf> {
     let mut dlg = rfd::FileDialog::new()
         .set_title(title)
-        .add_filter("Список модов (XML)", &["xml"])
+        .add_filter(tr("Список модов (XML)"), &["xml"])
         .set_file_name("ModList.xml");
     if let Some(dir) = modlist_dir() {
         dlg = dlg.set_directory(dir);
@@ -54,7 +56,7 @@ pub fn open_folder_dialog(ctx: &Context, open: &mut bool, settings: &mut AppSett
 
     let mut load_requested = false;
 
-    Window::new(RichText::new("▤  Настройка путей").color(theme::TEXT_PRIMARY).size(13.0).strong())
+    Window::new(RichText::new(tr("▤  Настройка путей")).color(theme::TEXT_PRIMARY).size(13.0).strong())
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
@@ -66,16 +68,16 @@ pub fn open_folder_dialog(ctx: &Context, open: &mut bool, settings: &mut AppSett
             ui.add_space(6.0);
 
             // ── Папка игры (обязательно) ────────────────────────────────
-            required_label(ui, "Папка с игрой:", settings.game_path.is_empty());
+            required_label(ui, tr("Папка с игрой:"), settings.game_path.is_empty());
             ui.add_space(3.0);
-            ui.label(RichText::new("Корневая папка RimWorld (содержит RimWorldWin64.exe или RimWorldLinux)")
+            ui.label(RichText::new(tr("Корневая папка RimWorld (содержит RimWorldWin64.exe или RimWorldLinux)"))
                 .color(theme::TEXT_MUTED).size(10.5).italics());
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 let changed = path_edit(ui, &mut settings.game_path,
                     "/path/to/RimWorld", "open_game_path");
                 if ui.small_button("…").clicked() {
-                    if let Some(p) = pick_folder("Выберите папку игры") {
+                    if let Some(p) = pick_folder(tr("Выберите папку игры")) {
                         settings.game_path = p;
                     }
                 }
@@ -85,16 +87,16 @@ pub fn open_folder_dialog(ctx: &Context, open: &mut bool, settings: &mut AppSett
             ui.add_space(10.0);
 
             // ── Папка с модами (обязательно) ────────────────────────────
-            required_label(ui, "Папка с локальными модами:", settings.local_mods_path.is_empty());
+            required_label(ui, tr("Папка с локальными модами:"), settings.local_mods_path.is_empty());
             ui.add_space(3.0);
-            ui.label(RichText::new("Папка Mods/ внутри директории игры")
+            ui.label(RichText::new(tr("Папка Mods/ внутри директории игры"))
                 .color(theme::TEXT_MUTED).size(10.5).italics());
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 path_edit(ui, &mut settings.local_mods_path,
                     "/path/to/RimWorld/Mods", "open_mods_path");
                 if ui.small_button("…").clicked() {
-                    if let Some(p) = pick_folder("Выберите папку с модами") {
+                    if let Some(p) = pick_folder(tr("Выберите папку с модами")) {
                         settings.local_mods_path = p;
                     }
                 }
@@ -103,17 +105,17 @@ pub fn open_folder_dialog(ctx: &Context, open: &mut bool, settings: &mut AppSett
             ui.add_space(10.0);
 
             // ── Папка конфигурации (необязательно) ──────────────────────
-            ui.label(RichText::new("Папка с конфигурацией (необязательно):")
+            ui.label(RichText::new(tr("Папка с конфигурацией (необязательно):"))
                 .color(theme::TEXT_PRIMARY).size(12.0).strong());
             ui.add_space(3.0);
-            ui.label(RichText::new("Содержит ModsConfig.xml — для загрузки и сохранения активных модов")
+            ui.label(RichText::new(tr("Содержит ModsConfig.xml — для загрузки и сохранения активных модов"))
                 .color(theme::TEXT_MUTED).size(10.5).italics());
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 path_edit(ui, &mut settings.config_path,
                     "~/.config/unity3d/.../Config", "open_config_path");
                 if ui.small_button("…").clicked() {
-                    if let Some(p) = pick_folder("Выберите папку конфигурации") {
+                    if let Some(p) = pick_folder(tr("Выберите папку конфигурации")) {
                         settings.config_path = p;
                     }
                 }
@@ -125,7 +127,7 @@ pub fn open_folder_dialog(ctx: &Context, open: &mut bool, settings: &mut AppSett
                 let can_open = !settings.game_path.is_empty() && !settings.local_mods_path.is_empty();
                 let ok_color = if can_open { theme::TEXT_PRIMARY } else { theme::TEXT_MUTED };
                 let ok_btn = Button::new(
-                    RichText::new("  Открыть  ").color(ok_color).size(12.0)
+                    RichText::new(tr("  Открыть  ")).color(ok_color).size(12.0)
                 ).fill(theme::HEADER_LEFT).stroke(Stroke::new(1.0, theme::BORDER_ACCENT));
 
                 let ok_resp = ui.add_enabled(can_open, ok_btn);
@@ -137,7 +139,7 @@ pub fn open_folder_dialog(ctx: &Context, open: &mut bool, settings: &mut AppSett
                 ui.add_space(8.0);
 
                 let cancel_btn = Button::new(
-                    RichText::new("  Отмена  ").color(theme::TEXT_MUTED).size(12.0)
+                    RichText::new(tr("  Отмена  ")).color(theme::TEXT_MUTED).size(12.0)
                 ).fill(theme::BG_ROW_EVEN).stroke(Stroke::new(1.0, theme::BORDER));
 
                 if ui.add(cancel_btn).clicked() { *open = false; }
@@ -160,7 +162,7 @@ pub fn save_dialog(
 
     let mut save_confirmed = false;
 
-    Window::new(RichText::new("⇩  Сохранить список модов").color(theme::TEXT_PRIMARY).size(13.0).strong())
+    Window::new(RichText::new(tr("⇩  Сохранить список модов")).color(theme::TEXT_PRIMARY).size(13.0).strong())
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
@@ -176,11 +178,11 @@ pub fn save_dialog(
                 .inner_margin(Margin::same(8))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Активных:").color(theme::TEXT_MUTED).size(12.0));
+                        ui.label(RichText::new(tr("Активных:")).color(theme::TEXT_MUTED).size(12.0));
                         ui.label(RichText::new(format!("{}", active_count))
                             .color(theme::ACTIVE_GREEN).size(12.0).strong());
                         ui.add_space(12.0);
-                        ui.label(RichText::new("Всего:").color(theme::TEXT_MUTED).size(12.0));
+                        ui.label(RichText::new(tr("Всего:")).color(theme::TEXT_MUTED).size(12.0));
                         ui.label(RichText::new(format!("{}", total_count))
                             .color(theme::TEXT_PRIMARY).size(12.0).strong());
                     });
@@ -193,12 +195,12 @@ pub fn save_dialog(
                     .fill(theme::BG_DARK)
                     .inner_margin(Margin::symmetric(8, 4))
                     .show(ui, |ui| {
-                        ui.label(RichText::new("⚠  Путь к конфигурации не задан.\nУкажите его в Настройки → Пути.")
+                        ui.label(RichText::new(tr("⚠  Путь к конфигурации не задан.\nУкажите его в Настройки → Пути."))
                             .color(theme::WARNING_AMBER).size(11.0));
                     });
             } else {
                 let target = format!("{}/ModsConfig.xml", config_path);
-                ui.label(RichText::new(format!("Запись в: {}", target))
+                ui.label(RichText::new(trf!("Запись в: {target}", target))
                     .color(theme::TEXT_MUTED).size(10.5).italics());
             }
 
@@ -207,7 +209,7 @@ pub fn save_dialog(
             ui.horizontal(|ui| {
                 let can_save = !config_path.is_empty();
                 let save_btn = Button::new(
-                    RichText::new("  ⇩ Сохранить  ").color(theme::TEXT_PRIMARY).size(12.0)
+                    RichText::new(tr("  ⇩ Сохранить  ")).color(theme::TEXT_PRIMARY).size(12.0)
                 ).fill(theme::HEADER_RIGHT)
                  .stroke(Stroke::new(1.0, theme::ACTIVE_GREEN.gamma_multiply(0.5)));
 
@@ -219,7 +221,7 @@ pub fn save_dialog(
                 ui.add_space(8.0);
 
                 let cancel_btn = Button::new(
-                    RichText::new("  Отмена  ").color(theme::TEXT_MUTED).size(12.0)
+                    RichText::new(tr("  Отмена  ")).color(theme::TEXT_MUTED).size(12.0)
                 ).fill(theme::BG_ROW_EVEN).stroke(Stroke::new(1.0, theme::BORDER));
 
                 if ui.add(cancel_btn).clicked() { *open = false; }
@@ -241,7 +243,7 @@ pub fn settings_dialog(
 
     let mut applied = false;
 
-    Window::new("⚙ Настройки")
+    Window::new(tr("⚙ Настройки"))
         .collapsible(false)
         .resizable(true)
         .min_width(480.0)
@@ -253,10 +255,10 @@ pub fn settings_dialog(
 
             // ── Вкладки ──────────────────────────────────────────────────
             ui.horizontal(|ui| {
-                tab_button(ui, "▤  Пути",       settings.active_tab == SettingsTab::Paths,     || settings.active_tab = SettingsTab::Paths);
-                tab_button(ui, "▶  Запуск",      settings.active_tab == SettingsTab::Launch,     || settings.active_tab = SettingsTab::Launch);
-                tab_button(ui, "❖  Интерфейс",  settings.active_tab == SettingsTab::Interface,  || settings.active_tab = SettingsTab::Interface);
-                tab_button(ui, "⚙  Поведение",   settings.active_tab == SettingsTab::Behavior,   || settings.active_tab = SettingsTab::Behavior);
+                tab_button(ui, tr("▤  Пути"),       settings.active_tab == SettingsTab::Paths,     || settings.active_tab = SettingsTab::Paths);
+                tab_button(ui, tr("▶  Запуск"),      settings.active_tab == SettingsTab::Launch,     || settings.active_tab = SettingsTab::Launch);
+                tab_button(ui, tr("❖  Интерфейс"),  settings.active_tab == SettingsTab::Interface,  || settings.active_tab = SettingsTab::Interface);
+                tab_button(ui, tr("⚙  Поведение"),   settings.active_tab == SettingsTab::Behavior,   || settings.active_tab = SettingsTab::Behavior);
             });
 
             ui.separator();
@@ -265,31 +267,31 @@ pub fn settings_dialog(
             match settings.active_tab {
                 // ── Пути ─────────────────────────────────────────────────
                 SettingsTab::Paths => {
-                    path_row_required(ui, "Местоположение игры",
-                        "Корневая папка RimWorld (содержит RimWorldWin64.exe или RimWorldLinux)",
+                    path_row_required(ui, tr("Местоположение игры"),
+                        tr("Корневая папка RimWorld (содержит RimWorldWin64.exe или RimWorldLinux)"),
                         &mut settings.game_path,
                         "game_path_edit",
                         true);
 
                     ui.add_space(10.0);
 
-                    path_row_required(ui, "Местоположение локальных модов",
-                        "Папка Mods/ внутри директории игры или пользовательская папка",
+                    path_row_required(ui, tr("Местоположение локальных модов"),
+                        tr("Папка Mods/ внутри директории игры или пользовательская папка"),
                         &mut settings.local_mods_path,
                         "mods_path_edit",
                         true);
 
                     ui.add_space(10.0);
 
-                    path_row(ui, "Местоположение конфигурации",
-                        "Папка с ModsConfig.xml (обычно ~/AppData/LocalLow/.../Config)",
+                    path_row(ui, tr("Местоположение конфигурации"),
+                        tr("Папка с ModsConfig.xml (обычно ~/AppData/LocalLow/.../Config)"),
                         &mut settings.config_path,
                         "config_path_edit");
 
                     ui.add_space(10.0);
 
-                    path_row(ui, "Папка SteamCMD (необязательно)",
-                        "Базовая папка для SteamCMD; пусто — использовать папку данных приложения",
+                    path_row(ui, tr("Папка SteamCMD (необязательно)"),
+                        tr("Базовая папка для SteamCMD; пусто — использовать папку данных приложения"),
                         &mut settings.steamcmd_path,
                         "steamcmd_path_edit");
                 }
@@ -299,74 +301,78 @@ pub fn settings_dialog(
 
                 // ── Интерфейс ────────────────────────────────────────────
                 SettingsTab::Interface => {
-                    section_header(ui, "ОПИСАНИЯ МОДОВ");
+                    section_header(ui, tr("ЯЗЫК"));
+                    ui.add_space(4.0);
+                    language_row(ui, settings);
+                    ui.add_space(12.0);
+                    section_header(ui, tr("ОПИСАНИЯ МОДОВ"));
                     ui.add_space(4.0);
                     checkbox_row(ui, &mut settings.load_remote_images,
-                        "Загружать изображения из описаний");
+                        tr("Загружать изображения из описаний"));
                     ui.add_space(2.0);
                     ui.horizontal(|ui| {
                         ui.add_space(10.0);
                         ui.label(RichText::new(
-                            "Картинки в описаниях лежат на сторонних хостах (CDN Steam, imgur\n\
+                            tr("Картинки в описаниях лежат на сторонних хостах (CDN Steam, imgur\n\
                              и любые другие, указанные автором мода). При включении выбор мода\n\
                              в списке отправляет к ним запрос. Выключено — вместо картинки\n\
-                             показывается ссылка."
+                             показывается ссылка.")
                         ).color(theme::TEXT_MUTED).size(10.5).italics());
                     });
                 }
 
                 // ── Поведение ────────────────────────────────────────────
                 SettingsTab::Behavior => {
-                    section_header(ui, "СОРТИРОВКА");
+                    section_header(ui, tr("СОРТИРОВКА"));
                     ui.add_space(4.0);
                     checkbox_row(ui, &mut settings.use_community_rules,
-                        "Использовать онлайн-базу правил сообщества");
+                        tr("Использовать онлайн-базу правил сообщества"));
                     ui.add_space(2.0);
                     ui.horizontal(|ui| {
                         ui.add_space(10.0);
                         ui.label(RichText::new(
-                            "Загружает правила loadBefore/loadAfter с GitHub (RimSort Community Rules).\n\
-                             Отключите при отсутствии интернета или для оффлайн-режима."
+                            tr("Загружает правила loadBefore/loadAfter с GitHub (RimSort Community Rules).\n\
+                             Отключите при отсутствии интернета или для оффлайн-режима.")
                         ).color(theme::TEXT_MUTED).size(10.5).italics());
                     });
 
                     ui.add_space(12.0);
-                    section_header(ui, "ПОИСК В МАСТЕРСКОЙ");
+                    section_header(ui, tr("ПОИСК В МАСТЕРСКОЙ"));
                     ui.add_space(4.0);
                     text_row(ui, &mut settings.steam_api_key, "steam_api_key_edit",
-                        "Ключ Steam Web API (необязательно)");
+                        tr("Ключ Steam Web API (необязательно)"));
                     ui.add_space(2.0);
                     api_key_check_row(ui, settings);
                     ui.add_space(2.0);
                     hint(ui,
-                        "Без ключа поиск читает страницу мастерской, а её Steam время от времени\n\
+                        tr("Без ключа поиск читает страницу мастерской, а её Steam время от времени\n\
                          переделывает. С ключом поиск идёт через официальный API и от вёрстки\n\
-                         не зависит. Бесплатно: steamcommunity.com/dev/apikey (домен — любой).");
+                         не зависит. Бесплатно: steamcommunity.com/dev/apikey (домен — любой)."));
 
                     ui.add_space(12.0);
-                    section_header(ui, "ЗАГРУЗКА МОДОВ (STEAMCMD)");
+                    section_header(ui, tr("ЗАГРУЗКА МОДОВ (STEAMCMD)"));
                     ui.add_space(4.0);
 
                     checkbox_row(ui, &mut settings.steamcmd_auto_move,
-                        "Автоматически перемещать моды в папку локальных модов после загрузки");
+                        tr("Автоматически перемещать моды в папку локальных модов после загрузки"));
                     ui.add_space(2.0);
                     ui.horizontal(|ui| {
                         ui.add_space(10.0);
                         ui.label(RichText::new(
-                            "Моды сразу попадают в RimWorld/Mods без ручного нажатия кнопки.\n\
-                             Отключите, если хотите проверить что скачалось перед добавлением."
+                            tr("Моды сразу попадают в RimWorld/Mods без ручного нажатия кнопки.\n\
+                             Отключите, если хотите проверить что скачалось перед добавлением.")
                         ).color(theme::TEXT_MUTED).size(10.5).italics());
                     });
 
                     ui.add_space(8.0);
                     checkbox_row(ui, &mut settings.steamcmd_multi_download,
-                        "Параллельная загрузка (несколько процессов SteamCMD)");
+                        tr("Параллельная загрузка (несколько процессов SteamCMD)"));
                     ui.add_space(2.0);
                     ui.horizontal(|ui| {
                         ui.add_space(10.0);
                         ui.label(RichText::new(
-                            "Запускает несколько процессов SteamCMD одновременно для ускорения загрузки.\n\
-                             Активируется только когда число модов ≥ порогу."
+                            tr("Запускает несколько процессов SteamCMD одновременно для ускорения загрузки.\n\
+                             Активируется только когда число модов ≥ порогу.")
                         ).color(theme::TEXT_MUTED).size(10.5).italics());
                     });
                     ui.add_space(8.0);
@@ -375,7 +381,7 @@ pub fn settings_dialog(
                     ui.add_enabled_ui(enabled, |ui| {
                         ui.horizontal(|ui| {
                             ui.add_space(10.0);
-                            ui.label(RichText::new("Макс. параллельных процессов:")
+                            ui.label(RichText::new(tr("Макс. параллельных процессов:"))
                                 .color(theme::TEXT_PRIMARY).size(12.0));
                             ui.add_space(6.0);
                             ui.add(egui::Slider::new(&mut settings.steamcmd_max_processes, 2..=4)
@@ -385,7 +391,7 @@ pub fn settings_dialog(
                         ui.horizontal(|ui| {
                             ui.add_space(10.0);
                             ui.label(RichText::new(
-                                "2 — стабильно для большинства систем; 3–4 только при быстром интернете."
+                                tr("2 — стабильно для большинства систем; 3–4 только при быстром интернете.")
                             ).color(theme::TEXT_MUTED).size(10.5).italics());
                         });
 
@@ -393,7 +399,7 @@ pub fn settings_dialog(
 
                         ui.horizontal(|ui| {
                             ui.add_space(10.0);
-                            ui.label(RichText::new("Порог активации (кол-во модов):")
+                            ui.label(RichText::new(tr("Порог активации (кол-во модов):"))
                                 .color(theme::TEXT_PRIMARY).size(12.0));
                             ui.add_space(6.0);
                             ui.add(egui::Slider::new(&mut settings.steamcmd_multi_threshold, 2..=50)
@@ -403,7 +409,7 @@ pub fn settings_dialog(
                         ui.horizontal(|ui| {
                             ui.add_space(10.0);
                             ui.label(RichText::new(
-                                "При меньшем числе модов используется один процесс (накладные расходы не оправданы)."
+                                tr("При меньшем числе модов используется один процесс (накладные расходы не оправданы).")
                             ).color(theme::TEXT_MUTED).size(10.5).italics());
                         });
                     });
@@ -416,7 +422,7 @@ pub fn settings_dialog(
 
             ui.horizontal(|ui| {
                 let apply = Button::new(
-                    RichText::new("  Применить  ").color(theme::TEXT_PRIMARY).size(12.0)
+                    RichText::new(tr("  Применить  ")).color(theme::TEXT_PRIMARY).size(12.0)
                 ).fill(theme::HEADER_LEFT).stroke(Stroke::new(1.0, theme::BORDER_ACCENT));
 
                 if ui.add(apply).clicked() {
@@ -427,7 +433,7 @@ pub fn settings_dialog(
                 ui.add_space(8.0);
 
                 let cancel = Button::new(
-                    RichText::new("  Отмена  ").color(theme::TEXT_MUTED).size(12.0)
+                    RichText::new(tr("  Отмена  ")).color(theme::TEXT_MUTED).size(12.0)
                 ).fill(theme::BG_ROW_EVEN).stroke(Stroke::new(1.0, theme::BORDER));
 
                 if ui.add(cancel).clicked() { *open = false; }
@@ -441,7 +447,7 @@ pub fn settings_dialog(
 // ─── Вкладка «Запуск» ────────────────────────────────────────────────────────
 
 fn launch_tab(ui: &mut egui::Ui, settings: &mut AppSettings, prefixes: &[Prefix]) {
-    section_header(ui, "СПОСОБ ЗАПУСКА");
+    section_header(ui, tr("СПОСОБ ЗАПУСКА"));
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_space(10.0);
@@ -458,25 +464,25 @@ fn launch_tab(ui: &mut egui::Ui, settings: &mut AppSettings, prefixes: &[Prefix]
             });
     });
     ui.add_space(2.0);
-    hint(ui, "«Автоматически» — нативная сборка запускается напрямую, Windows-сборка через umu-run.");
+    hint(ui, tr("«Автоматически» — нативная сборка запускается напрямую, Windows-сборка через umu-run."));
 
     if settings.launch.runner == Runner::Custom {
         ui.add_space(8.0);
-        section_header(ui, "СВОЯ КОМАНДА");
+        section_header(ui, tr("СВОЯ КОМАНДА"));
         ui.add_space(4.0);
         text_row(ui, &mut settings.launch.custom_command, "custom_command",
-            "например: gamescope -f -- umu-run");
+            tr("например: gamescope -f -- umu-run"));
         ui.add_space(2.0);
-        hint(ui, "Путь к игре и аргументы дописываются в конец команды.");
+        hint(ui, tr("Путь к игре и аргументы дописываются в конец команды."));
     }
 
     ui.add_space(10.0);
-    section_header(ui, "ПРЕФИКС WINE / PROTON");
+    section_header(ui, tr("ПРЕФИКС WINE / PROTON"));
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_space(10.0);
-        if ui.button("…").on_hover_text("Выбрать папку").clicked() {
-            if let Some(p) = pick_folder("Выберите префикс") {
+        if ui.button("…").on_hover_text(tr("Выбрать папку")).clicked() {
+            if let Some(p) = pick_folder(tr("Выберите префикс")) {
                 settings.launch.prefix = p;
             }
         }
@@ -484,23 +490,23 @@ fn launch_tab(ui: &mut egui::Ui, settings: &mut AppSettings, prefixes: &[Prefix]
             egui::TextEdit::singleline(&mut settings.launch.prefix)
                 .id(egui::Id::new("prefix_edit"))
                 .desired_width(fit_width_minus(ui, 12.0))
-                .hint_text("не задан — будет выбран найденный ниже")
+                .hint_text(tr("не задан — будет выбран найденный ниже"))
                 .text_color(theme::TEXT_PRIMARY),
         );
     });
 
     ui.add_space(6.0);
     if prefixes.is_empty() {
-        hint(ui, "Префиксы с данными RimWorld не найдены.");
+        hint(ui, tr("Префиксы с данными RimWorld не найдены."));
     } else {
-        hint(ui, "Найденные префиксы (первым — тот, в чей конфиг писали последним):");
+        hint(ui, tr("Найденные префиксы (первым — тот, в чей конфиг писали последним):"));
         ui.add_space(2.0);
         for prefix in prefixes {
             ui.horizontal(|ui| {
                 ui.add_space(10.0);
                 if ui
-                    .button("Выбрать")
-                    .on_hover_text("Подставит и пути к ModsConfig.xml и Player.log")
+                    .button(tr("Выбрать"))
+                    .on_hover_text(tr("Подставит и пути к ModsConfig.xml и Player.log"))
                     .clicked()
                 {
                     settings.adopt_prefix(prefix);
@@ -520,19 +526,19 @@ fn launch_tab(ui: &mut egui::Ui, settings: &mut AppSettings, prefixes: &[Prefix]
     }
 
     ui.add_space(10.0);
-    section_header(ui, "ВЕРСИЯ PROTON");
+    section_header(ui, tr("ВЕРСИЯ PROTON"));
     ui.add_space(4.0);
     text_row(ui, &mut settings.launch.proton, "proton_edit", "GE-Proton");
     ui.add_space(2.0);
-    hint(ui, "Имя (GE-Proton — последний установленный) или полный путь к версии.");
+    hint(ui, tr("Имя (GE-Proton — последний установленный) или полный путь к версии."));
 
     ui.add_space(10.0);
-    section_header(ui, "ДОПОЛНИТЕЛЬНЫЕ АРГУМЕНТЫ");
+    section_header(ui, tr("ДОПОЛНИТЕЛЬНЫЕ АРГУМЕНТЫ"));
     ui.add_space(4.0);
     text_row(ui, &mut settings.launch.extra_args, "extra_args_edit", "-popupwindow");
 
     ui.add_space(10.0);
-    section_header(ui, "ИТОГОВАЯ КОМАНДА");
+    section_header(ui, tr("ИТОГОВАЯ КОМАНДА"));
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_space(10.0);
@@ -569,6 +575,33 @@ fn hint(ui: &mut egui::Ui, text: &str) {
     });
 }
 
+/// Выбор языка интерфейса. Применяется сразу — без перезапуска.
+fn language_row(ui: &mut egui::Ui, settings: &mut AppSettings) {
+    let system = tr("Как в системе");
+    let current = settings.language.map_or(system, Lang::native_name);
+    ui.horizontal(|ui| {
+        ui.add_space(10.0);
+        egui::ComboBox::from_id_salt("ui_language")
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                let mut changed = false;
+                if ui.selectable_label(settings.language.is_none(), system).clicked() {
+                    settings.language = None;
+                    changed = true;
+                }
+                for lang in Lang::ALL {
+                    if ui.selectable_label(settings.language == Some(lang), lang.native_name()).clicked() {
+                        settings.language = Some(lang);
+                        changed = true;
+                    }
+                }
+                if changed {
+                    settings.apply_language();
+                }
+            });
+    });
+}
+
 /// Кнопка «Проверить ключ» и её итог. Запрос идёт в фоне: окно настроек
 /// не должно замирать на сетевом таймауте.
 fn api_key_check_row(ui: &mut egui::Ui, settings: &mut AppSettings) {
@@ -577,7 +610,7 @@ fn api_key_check_row(ui: &mut egui::Ui, settings: &mut AppSettings) {
         ui.add_space(10.0);
         let running = settings.api_key_check.is_running();
         let can_check = !running && !settings.steam_api_key.trim().is_empty();
-        if ui.add_enabled(can_check, Button::new("Проверить ключ")).clicked() {
+        if ui.add_enabled(can_check, Button::new(tr("Проверить ключ"))).clicked() {
             let key = settings.steam_api_key.clone();
             settings.api_key_check = Job::spawn(move || {
                 crate::steam::workshop_api::check_api_key(&key).map_err(|e| e.to_string())
@@ -589,7 +622,7 @@ fn api_key_check_row(ui: &mut egui::Ui, settings: &mut AppSettings) {
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
             }
             Job::Done(total) => {
-                ui.label(RichText::new(format!("✓ Ключ работает, модов в мастерской: {total}"))
+                ui.label(RichText::new(trf!("✓ Ключ работает, модов в мастерской: {total}", total))
                     .color(theme::ACTIVE_GREEN).size(11.0));
             }
             Job::Failed(err) => {
@@ -640,7 +673,7 @@ fn path_row_required(ui: &mut egui::Ui, label: &str, hint: &str, value: &mut Str
     let spacing = ui.spacing().item_spacing.x;
 
     ui.horizontal(|ui| {
-        if ui.button("…").on_hover_text("Выбрать папку").clicked() {
+        if ui.button("…").on_hover_text(tr("Выбрать папку")).clicked() {
             if let Some(p) = pick_folder(label) {
                 *value = p;
             }
@@ -651,7 +684,7 @@ fn path_row_required(ui: &mut egui::Ui, label: &str, hint: &str, value: &mut Str
                 .id(egui::Id::new(id))
                 .desired_width(fit_width(ui))
                 .text_color(theme::TEXT_PRIMARY)
-                .hint_text("Не задан"),
+                .hint_text(tr("Не задан")),
         );
     });
 }
@@ -678,7 +711,7 @@ fn required_label(ui: &mut egui::Ui, label: &str, is_empty: bool) {
         ui.label(RichText::new(label).color(theme::TEXT_PRIMARY).size(12.0).strong());
         if is_empty {
             ui.label(RichText::new("*").color(theme::ERROR_RED).size(12.0).strong())
-                .on_hover_text("Обязательное поле");
+                .on_hover_text(tr("Обязательное поле"));
         }
     });
 }

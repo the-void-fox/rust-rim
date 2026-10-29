@@ -6,6 +6,7 @@ use crate::description;
 use crate::mod_data::{ModEntry, ModId, ModSource};
 use crate::ui::fit_width;
 use crate::ui::theme;
+use crate::i18n::tr;
 
 /// Правая панель вместе со своими кэшами.
 ///
@@ -78,7 +79,7 @@ fn show_mod_details(
     let Some(m) = mod_entry else {
         ui.add_space(ui.available_height() / 3.0);
         ui.vertical_centered(|ui| {
-            ui.label(RichText::new("Выберите мод\nдля просмотра")
+            ui.label(RichText::new(tr("Выберите мод\nдля просмотра"))
                 .color(theme::TEXT_MUTED).size(12.0).italics());
         });
         return;
@@ -109,16 +110,16 @@ fn show_mod_details(
             ui.add_space(6.0);
 
             // ── Автор и ID ───────────────────────────────────────────────
-            field(ui, "Автор:", &m.author, theme::TEXT_ACCENT, 11.0);
+            field(ui, tr("Автор:"), &m.author, theme::TEXT_ACCENT, 11.0);
             field(ui, "ID:", m.package_id.as_str(), theme::TEXT_MUTED, 10.5);
-            field(ui, "Версии RW:", &m.supported_versions.join(", "), theme::TEXT_PRIMARY, 11.0);
+            field(ui, tr("Версии RW:"), &m.supported_versions.join(", "), theme::TEXT_PRIMARY, 11.0);
 
             // ── Описание ─────────────────────────────────────────────────
             if !markdown.is_empty() {
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(4.0);
-                ui.label(RichText::new("ОПИСАНИЕ")
+                ui.label(RichText::new(tr("ОПИСАНИЕ"))
                     .color(theme::TEXT_MUTED).size(10.0).strong());
                 ui.add_space(4.0);
                 // Панель справа раскладывает содержимое по его же запросу
@@ -138,7 +139,7 @@ fn show_mod_details(
                 ui.add_space(4.0);
             }
             if has_deps {
-                ui.label(RichText::new("ЗАВИСИМОСТИ")
+                ui.label(RichText::new(tr("ЗАВИСИМОСТИ"))
                     .color(theme::TEXT_MUTED).size(10.0).strong());
                 for dep in &m.dependencies {
                     bullet(ui, "→", theme::WARNING_AMBER, dep.as_str());
@@ -146,7 +147,7 @@ fn show_mod_details(
                 ui.add_space(4.0);
             }
             if has_incompat {
-                ui.label(RichText::new("НЕСОВМЕСТИМО")
+                ui.label(RichText::new(tr("НЕСОВМЕСТИМО"))
                     .color(theme::TEXT_MUTED).size(10.0).strong());
                 for ic in &m.incompatible_with {
                     bullet(ui, "×", theme::ERROR_RED, ic.as_str());

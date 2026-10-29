@@ -1,6 +1,8 @@
 use egui::{Align, Button, Color32, FontId, Layout, RichText, Ui, Vec2};
 
 use crate::ui::theme;
+use crate::i18n::{k, tr};
+use crate::trf;
 
 /// Результат взаимодействия с панелью инструментов.
 #[derive(Default)]
@@ -71,49 +73,49 @@ struct Group {
 // окне хвост уезжал в «⋯». Теперь на виду два главных действия, остальное
 // разложено по группам по смыслу.
 const GROUPS: &[Group] = &[
-    Group { icon: "▤", label: "Моды", items: &[
-        Some((Btn::Reload, "⟳  Перечитать с диска (F5)",
-            "Перечитать папки модов. Порядок загрузки сохраняется")),
-        Some((Btn::Updates, "⇧  Проверить обновления",
-            "Для каких модов в мастерской есть версия новее")),
-        Some((Btn::Workshop, "⚒  Мастерская Steam",
-            "Найти и скачать моды и сборки из Steam Workshop")),
+    Group { icon: "▤", label: k("Моды"), items: &[
+        Some((Btn::Reload, k("⟳  Перечитать с диска (F5)"),
+            k("Перечитать папки модов. Порядок загрузки сохраняется"))),
+        Some((Btn::Updates, k("⇧  Проверить обновления"),
+            k("Для каких модов в мастерской есть версия новее"))),
+        Some((Btn::Workshop, k("⚒  Мастерская Steam"),
+            k("Найти и скачать моды и сборки из Steam Workshop"))),
     ]},
-    Group { icon: "⇅", label: "Сборка", items: &[
-        Some((Btn::Sort, "⇅  Сортировать",
-            "Расставить активные моды в правильном порядке загрузки")),
-        Some((Btn::Check, "✓  Проверить сборку",
-            "Без запуска игры: недостающие зависимости, конфликты, порядок, версия игры")),
+    Group { icon: "⇅", label: k("Сборка"), items: &[
+        Some((Btn::Sort, k("⇅  Сортировать"),
+            k("Расставить активные моды в правильном порядке загрузки"))),
+        Some((Btn::Check, k("✓  Проверить сборку"),
+            k("Без запуска игры: недостающие зависимости, конфликты, порядок, версия игры"))),
         None,
-        Some((Btn::Test, "⚛  Тест игры",
-            "Запустить игру с этой сборкой и разобрать лог. Занимает минуты")),
-        Some((Btn::Hunt, "⚖  Найти виновника",
-            "Запускать игру с урезанными сборками, пока не найдётся мод, который всё ломает")),
+        Some((Btn::Test, k("⚛  Тест игры"),
+            k("Запустить игру с этой сборкой и разобрать лог. Занимает минуты"))),
+        Some((Btn::Hunt, k("⚖  Найти виновника"),
+            k("Запускать игру с урезанными сборками, пока не найдётся мод, который всё ломает"))),
         None,
-        Some((Btn::MarkWorking, "★  Запомнить как рабочую",
-            "Отметить текущую сборку как рабочую. Всё, что включишь потом, будет помечено «новый». \
-             После успешного теста игры отметка ставится сама")),
-        Some((Btn::DisableNew, "×  Выключить новые",
-            "Выключить моды, включённые после рабочей сборки — быстрый откат к тому, что работало")),
+        Some((Btn::MarkWorking, k("★  Запомнить как рабочую"),
+            k("Отметить текущую сборку как рабочую. Всё, что включишь потом, будет помечено «новый». \
+             После успешного теста игры отметка ставится сама"))),
+        Some((Btn::DisableNew, k("×  Выключить новые"),
+            k("Выключить моды, включённые после рабочей сборки — быстрый откат к тому, что работало"))),
     ]},
-    Group { icon: "⎘", label: "Списки", items: &[
-        Some((Btn::SaveList, "⎘  Сохранить список…",
-            "Записать активные моды в файл (совместимо с RimSort)")),
-        Some((Btn::LoadList, "⎆  Загрузить список…",
-            "Заменить сборку списком из файла: ModsConfig.xml, .rml или сохранение .rws")),
+    Group { icon: "⎘", label: k("Списки"), items: &[
+        Some((Btn::SaveList, k("⎘  Сохранить список…"),
+            k("Записать активные моды в файл (совместимо с RimSort)"))),
+        Some((Btn::LoadList, k("⎆  Загрузить список…"),
+            k("Заменить сборку списком из файла: ModsConfig.xml, .rml или сохранение .rws"))),
         None,
-        Some((Btn::ActivateAll, "▶▶  Включить все",
-            "Сделать активными все установленные моды")),
-        Some((Btn::DeactivateAll, "◀◀  Выключить все",
-            "Оставить активным только Core")),
+        Some((Btn::ActivateAll, k("▶▶  Включить все"),
+            k("Сделать активными все установленные моды"))),
+        Some((Btn::DeactivateAll, k("◀◀  Выключить все"),
+            k("Оставить активным только Core"))),
     ]},
-    Group { icon: "☰", label: "Инструменты", items: &[
-        Some((Btn::Logs, "☰  Анализ логов",
-            "Разобрать Player.log: ошибки и моды, которые их вызвали")),
-        Some((Btn::Tags, "⚑  Теги",
-            "Свои метки и цвета для модов")),
+    Group { icon: "☰", label: k("Инструменты"), items: &[
+        Some((Btn::Logs, k("☰  Анализ логов"),
+            k("Разобрать Player.log: ошибки и моды, которые их вызвали"))),
+        Some((Btn::Tags, k("⚑  Теги"),
+            k("Свои метки и цвета для модов"))),
         Some((Btn::SteamCmd, "⬇  SteamCMD",
-            "Скачать моды из мастерской по ID без клиента Steam")),
+            k("Скачать моды из мастерской по ID без клиента Steam"))),
     ]},
 ];
 
@@ -154,7 +156,7 @@ pub fn show_toolbar(ui: &mut Ui, state: ToolbarState) -> ToolbarResponse {
             let gear = Button::new(RichText::new("⚙").color(theme::TEXT_MUTED).size(14.0))
                 .fill(Color32::TRANSPARENT)
                 .stroke(egui::Stroke::NONE);
-            if ui.add(gear).on_hover_text("Настройки").clicked() {
+            if ui.add(gear).on_hover_text(tr("Настройки")).clicked() {
                 resp.settings_clicked = true;
             }
 
@@ -181,8 +183,8 @@ fn draw_left_group(ui: &mut Ui, resp: &mut ToolbarResponse, state: ToolbarState,
     // Подписи групп убираются первыми, потом подписи главных кнопок:
     // иконки с выпадающими меню остаются доступны при любой ширине.
     let save_mark = if state.unsaved { " •" } else { "" };
-    let play_full = "▶ Запустить".to_string();
-    let save_full = format!("⇩ Сохранить{save_mark}");
+    let play_full = tr("▶ Запустить").to_string();
+    let save_full = trf!("⇩ Сохранить{save_mark}", save_mark);
     let groups_full: f32 = GROUPS.iter().map(|g| button_width(ui, &group_text(g, true))).sum();
     let groups_icons: f32 = GROUPS.iter().map(|g| button_width(ui, &group_text(g, false))).sum();
     let main_full = button_width(ui, &play_full) + button_width(ui, &save_full);
@@ -204,14 +206,14 @@ fn draw_left_group(ui: &mut Ui, resp: &mut ToolbarResponse, state: ToolbarState,
     };
     let play_btn = Button::new(RichText::new(play).color(theme::BG_DARK).size(BTN_TEXT).strong())
         .fill(theme::ACTIVE_GREEN);
-    if ui.add(play_btn).on_hover_text("Запустить RimWorld с текущей сборкой").clicked() {
+    if ui.add(play_btn).on_hover_text(tr("Запустить RimWorld с текущей сборкой")).clicked() {
         resp.play_clicked = true;
     }
     let save_color = if state.unsaved { theme::WARNING_AMBER } else { theme::TEXT_PRIMARY };
     let save_tip = if state.unsaved {
-        "Есть несохранённые изменения: игра их не увидит, пока сборка не записана в ModsConfig.xml"
+        tr("Есть несохранённые изменения: игра их не увидит, пока сборка не записана в ModsConfig.xml")
     } else {
-        "Записать сборку в ModsConfig.xml — игра загрузит именно её"
+        tr("Записать сборку в ModsConfig.xml — игра загрузит именно её")
     };
     let save_btn = Button::new(RichText::new(save).color(save_color).size(BTN_TEXT))
         .fill(theme::BG_ROW_EVEN)
@@ -236,15 +238,15 @@ fn draw_left_group(ui: &mut Ui, resp: &mut ToolbarResponse, state: ToolbarState,
                 };
                 let (enabled, why_not) = match btn {
                     Btn::Hunt => (state.can_hunt,
-                        "Сначала «Тест игры»: искать виновника есть смысл, когда тест провалился"),
+                        tr("Сначала «Тест игры»: искать виновника есть смысл, когда тест провалился")),
                     Btn::DisableNew => (state.new_count > 0,
-                        "Новых модов нет: всё активное входит в рабочую сборку"),
+                        tr("Новых модов нет: всё активное входит в рабочую сборку")),
                     _ => (true, ""),
                 };
-                let tip = if enabled { tip } else { why_not };
+                let tip = if enabled { tr(tip) } else { why_not };
                 let label = match btn {
-                    Btn::DisableNew if state.new_count > 0 => format!("{label} ({})", state.new_count),
-                    _ => label.to_string(),
+                    Btn::DisableNew if state.new_count > 0 => format!("{} ({})", tr(label), state.new_count),
+                    _ => tr(label).to_string(),
                 };
                 let r = ui.add_enabled(enabled, Button::new(RichText::new(label).size(BTN_TEXT)));
                 let r = if enabled { r.on_hover_text(tip) } else { r.on_disabled_hover_text(tip) };
@@ -255,13 +257,13 @@ fn draw_left_group(ui: &mut Ui, resp: &mut ToolbarResponse, state: ToolbarState,
             }
         })
         .response
-        .on_hover_text(group.label);
+        .on_hover_text(tr(group.label));
     }
 }
 
 fn group_text(group: &Group, with_label: bool) -> String {
     if with_label {
-        format!("{} {} ⏷", group.icon, group.label)
+        format!("{} {} ⏷", group.icon, tr(group.label))
     } else {
         format!("{} ⏷", group.icon)
     }
