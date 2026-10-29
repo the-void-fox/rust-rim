@@ -1,0 +1,44 @@
+# Steam время от времени переделывает страницу мастерской, и поиск в
+# rust-rim ломается. Раз в сутки проверяем его на живом Steam и при поломке
+# заводим issue — чтобы узнать об этом раньше пользователей.
+name: Workshop canary
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Поиск по мастерской
+        run: cargo run --example workshop_smoke 2>&1 | tee smoke.log
+        shell: bash -o pipefail {0}
+      - name: Завести issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          title="Workshop: поиск сломался"
+          # Одна открытая issue на поломку, а не новая каждый день.
+          if gh issue list --state open --search "in:title \"$title\"" --json number --jq 'length' | grep -qv '^0$'; then
+            exit 0
+          fi
+          {
+            echo "Ежедневная проверка не смогла найти моды на живом Steam."
+            echo
+            echo "Запуск: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo '```'
+            tail -n 30 smoke.log
+            echo '```'
+          } > body.md
+          gh issue create --title "$title" --body-file body.md

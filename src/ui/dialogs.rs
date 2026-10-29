@@ -1,6 +1,7 @@
 use egui::{Align2, Button, Context, Frame, Margin, RichText, Stroke, Window};
 
 use crate::game::{launch, Prefix, Runner};
+use crate::job::Job;
 use crate::settings::{AppSettings, SettingsTab};
 use crate::ui::theme;
 use crate::ui::{fit_width, fit_width_minus};
@@ -330,6 +331,19 @@ pub fn settings_dialog(
                     });
 
                     ui.add_space(12.0);
+                    section_header(ui, "ПОИСК В МАСТЕРСКОЙ");
+                    ui.add_space(4.0);
+                    text_row(ui, &mut settings.steam_api_key, "steam_api_key_edit",
+                        "Ключ Steam Web API (необязательно)");
+                    ui.add_space(2.0);
+                    api_key_check_row(ui, settings);
+                    ui.add_space(2.0);
+                    hint(ui,
+                        "Без ключа поиск читает страницу мастерской, а её Steam время от времени\n\
+                         переделывает. С ключом поиск идёт через официальный API и от вёрстки\n\
+                         не зависит. Бесплатно: steamcommunity.com/dev/apikey (домен — любой).");
+
+                    ui.add_space(12.0);
                     section_header(ui, "ЗАГРУЗКА МОДОВ (STEAMCMD)");
                     ui.add_space(4.0);
 
@@ -552,6 +566,37 @@ fn hint(ui: &mut egui::Ui, text: &str) {
     ui.horizontal(|ui| {
         ui.add_space(10.0);
         ui.label(RichText::new(text).color(theme::TEXT_MUTED).size(10.5).italics());
+    });
+}
+
+/// Кнопка «Проверить ключ» и её итог. Запрос идёт в фоне: окно настроек
+/// не должно замирать на сетевом таймауте.
+fn api_key_check_row(ui: &mut egui::Ui, settings: &mut AppSettings) {
+    settings.api_key_check.poll();
+    ui.horizontal(|ui| {
+        ui.add_space(10.0);
+        let running = settings.api_key_check.is_running();
+        let can_check = !running && !settings.steam_api_key.trim().is_empty();
+        if ui.add_enabled(can_check, Button::new("Проверить ключ")).clicked() {
+            let key = settings.steam_api_key.clone();
+            settings.api_key_check = Job::spawn(move || {
+                crate::steam::workshop_api::check_api_key(&key).map_err(|e| e.to_string())
+            });
+        }
+        match &settings.api_key_check {
+            Job::Running(_) => {
+                ui.spinner();
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+            }
+            Job::Done(total) => {
+                ui.label(RichText::new(format!("✓ Ключ работает, модов в мастерской: {total}"))
+                    .color(theme::ACTIVE_GREEN).size(11.0));
+            }
+            Job::Failed(err) => {
+                ui.label(RichText::new(format!("✕ {err}")).color(theme::WARNING_AMBER).size(11.0));
+            }
+            Job::Idle => {}
+        }
     });
 }
 

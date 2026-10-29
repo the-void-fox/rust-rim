@@ -140,6 +140,7 @@ impl Default for RustRim {
 impl RustRim {
     pub fn new() -> Self {
         let settings = AppSettings::load();
+        crate::steam::workshop_api::set_api_key(&settings.steam_api_key);
         let has_paths = settings.has_required_paths();
         let mut app = Self {
             db: ModDb::empty(),
@@ -866,6 +867,7 @@ impl RustRim {
                 self.session.prefixes(),
             )
         {
+            crate::steam::workshop_api::set_api_key(&self.settings.steam_api_key);
             self.settings.save();
             self.load_mods();
         }

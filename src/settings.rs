@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::game::LaunchSettings;
+use crate::job::Job;
 
 #[derive(PartialEq, Default, Clone, Serialize, Deserialize)]
 pub enum SettingsTab {
@@ -42,11 +43,18 @@ pub struct AppSettings {
     /// хосты, и выбор мода в списке превращался бы в сетевой запрос к ним.
     #[serde(default)]
     pub load_remote_images: bool,
+    /// Ключ Steam Web API: запасной путь поиска по мастерской, когда Steam
+    /// в очередной раз переделывает страницу. Необязателен.
+    #[serde(default)]
+    pub steam_api_key: String,
     /// Как запускать игру.
     #[serde(default)]
     pub launch: LaunchSettings,
     #[serde(skip)]
     pub active_tab: SettingsTab,
+    /// Идущая проверка ключа Steam Web API (кнопка в настройках).
+    #[serde(skip)]
+    pub api_key_check: Job<u64>,
 }
 
 impl Default for AppSettings {
@@ -66,8 +74,10 @@ impl Default for AppSettings {
             steamcmd_multi_threshold: 10,
             log_file_path: String::new(),
             load_remote_images: false,
+            steam_api_key: String::new(),
             launch: LaunchSettings::default(),
             active_tab: SettingsTab::default(),
+            api_key_check: Job::Idle,
         }
     }
 }

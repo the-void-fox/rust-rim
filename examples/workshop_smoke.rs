@@ -4,6 +4,8 @@ use workshop_api::SortOrder;
 
 fn main() -> anyhow::Result<()> {
     let (items, has_next) = workshop_api::fetch_workshop_page("medieval", 1, SortOrder::Trending)?;
+    let (none, _) = workshop_api::fetch_workshop_page("qxjzvwqxjzvwqxjzvw", 1, SortOrder::Trending)?;
+    println!("Пустой поиск: {} модов (без ошибки)", none.len());
     println!("Модов: {} (has_next: {has_next})", items.len());
     for it in items.iter().take(5) {
         println!("  {} — {} (by {})", it.id, it.title, it.author);
