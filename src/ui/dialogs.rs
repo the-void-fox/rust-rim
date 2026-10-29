@@ -593,7 +593,7 @@ fn api_key_check_row(ui: &mut egui::Ui, settings: &mut AppSettings) {
                     .color(theme::ACTIVE_GREEN).size(11.0));
             }
             Job::Failed(err) => {
-                ui.label(RichText::new(format!("✕ {err}")).color(theme::WARNING_AMBER).size(11.0));
+                ui.label(RichText::new(format!("× {err}")).color(theme::WARNING_AMBER).size(11.0));
             }
             Job::Idle => {}
         }
