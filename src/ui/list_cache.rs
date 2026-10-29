@@ -14,6 +14,10 @@ use crate::tags::Tags;
 pub struct SearchState {
     pub inactive_query: String,
     pub active_query: String,
+    /// Тег, выбранный чипом над списками (имя в нижнем регистре). Фильтрует
+    /// обе колонки сразу: искать «где-то среди моих модов» привычнее, чем
+    /// помнить, в какой колонке мод сейчас лежит.
+    pub tag_filter: Option<String>,
 }
 
 /// Предвычисленные флаги предупреждений для одного мода.
@@ -29,8 +33,13 @@ pub struct ListCaches {
     pub warn: HashMap<ModId, RowWarn>,
     pub inactive: Vec<ModId>,
     pub active: Vec<ModId>,
+    /// Сколько модов по запросу левой колонки нашлось бы в правой — и наоборот.
+    /// Без этой подсказки пустой результат выглядит как «поиск сломан».
+    pub inactive_elsewhere: usize,
+    pub active_elsewhere: usize,
     last_inactive_q: String,
     last_active_q: String,
+    last_tag: Option<String>,
     dirty: bool,
 }
 
@@ -41,8 +50,11 @@ impl Default for ListCaches {
             warn: HashMap::new(),
             inactive: Vec::new(),
             active: Vec::new(),
+            inactive_elsewhere: 0,
+            active_elsewhere: 0,
             last_inactive_q: String::new(),
             last_active_q: String::new(),
+            last_tag: None,
             dirty: true,
         }
     }
@@ -89,33 +101,82 @@ impl ListCaches {
             }
         }
 
-        if changed || search.inactive_query != self.last_inactive_q {
+        let tag_changed = search.tag_filter != self.last_tag;
+        if tag_changed {
+            self.last_tag = search.tag_filter.clone();
+        }
+        let tag = search.tag_filter.as_deref();
+
+        if changed || tag_changed || search.inactive_query != self.last_inactive_q {
             self.last_inactive_q = search.inactive_query.clone();
-            let q = search.inactive_query.to_lowercase();
-            let list: Vec<ModId> = db
+            let q = Query::parse(&search.inactive_query, tag);
+            self.inactive = db
                 .ids()
                 .filter(|id| !profile.is_active(id))
-                .filter(|id| q.is_empty() || self.matches(id, &q))
+                .filter(|id| self.matches(id, &q))
                 .cloned()
                 .collect();
-            self.inactive = list;
+            self.inactive_elsewhere = if q.is_empty() {
+                0
+            } else {
+                profile.order().iter().filter(|id| self.matches(id, &q)).count()
+            };
         }
 
-        if changed || search.active_query != self.last_active_q {
+        if changed || tag_changed || search.active_query != self.last_active_q {
             self.last_active_q = search.active_query.clone();
-            let q = search.active_query.to_lowercase();
-            let list: Vec<ModId> = profile
+            let q = Query::parse(&search.active_query, tag);
+            self.active = profile
                 .order()
                 .iter()
-                .filter(|id| q.is_empty() || self.matches(id, &q))
+                .filter(|id| self.matches(id, &q))
                 .cloned()
                 .collect();
-            self.active = list;
+            self.active_elsewhere = if q.is_empty() {
+                0
+            } else {
+                db.ids().filter(|id| !profile.is_active(id) && self.matches(id, &q)).count()
+            };
         }
     }
 
-    fn matches(&self, id: &ModId, query: &str) -> bool {
-        self.keys.get(id).is_some_and(|k| k.contains(query))
+    fn matches(&self, id: &ModId, q: &Query) -> bool {
+        if q.is_empty() {
+            return true;
+        }
+        let Some(key) = self.keys.get(id) else { return false };
+        q.terms.iter().all(|t| key.contains(t.as_str()))
+            && q.tag.as_ref().is_none_or(|tag| key.lines().any(|l| l.strip_prefix("tag:") == Some(tag.as_str())))
+    }
+}
+
+/// Разобранный запрос: слова через пробел ищутся все сразу, в любом порядке.
+struct Query {
+    terms: Vec<String>,
+    /// Точное имя тега из чипа.
+    tag: Option<String>,
+}
+
+impl Query {
+    fn parse(raw: &str, tag: Option<&str>) -> Self {
+        let lower = raw.to_lowercase();
+        // «tag: имя» с пробелом — естественная опечатка; без склейки «tag:»
+        // превращалось в отдельное слово и совпадало вообще с любым тегом.
+        let mut glued = String::with_capacity(lower.len());
+        let mut rest = lower.as_str();
+        while let Some(at) = rest.find("tag:") {
+            glued.push_str(&rest[..at + 4]);
+            rest = rest[at + 4..].trim_start();
+        }
+        glued.push_str(rest);
+        Self {
+            terms: glued.split_whitespace().map(str::to_string).collect(),
+            tag: tag.map(str::to_string),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.terms.is_empty() && self.tag.is_none()
     }
 }
 
@@ -193,6 +254,30 @@ mod tests {
         assert_eq!(inactive_for("фреймворк"), ["a.mod"]);
         // А мод без тега по нему не находится.
         assert!(!inactive_for("фреймворк").contains(&"b.mod".to_string()));
+    }
+
+    #[test]
+    fn tag_query_tolerates_space_after_colon() {
+        assert_eq!(inactive_for("tag: Фреймворк"), ["a.mod"]);
+    }
+
+    #[test]
+    fn words_match_in_any_order() {
+        assert_eq!(inactive_for("content charlie"), ["c.mod"]);
+    }
+
+    #[test]
+    fn tag_chip_filters_and_counts_other_column() {
+        let (db, _, tags) = fixture();
+        let mut profile = Profile::new();
+        profile.activate(ModId::new("a.mod"));
+        let search = SearchState { tag_filter: Some("фреймворк".into()), ..Default::default() };
+        let mut caches = ListCaches::default();
+        caches.refresh(&db, &profile, &tags, &search);
+        // Помеченный мод активен: слева пусто, но подсказка знает, где он.
+        assert!(caches.inactive.is_empty());
+        assert_eq!(caches.inactive_elsewhere, 1);
+        assert_eq!(caches.active.len(), 1);
     }
 
     #[test]

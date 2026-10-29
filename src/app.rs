@@ -665,6 +665,7 @@ impl RustRim {
         egui::CentralPanel::default()
             .frame(Frame::NONE.fill(theme::BG_DARK))
             .show(ui, |ui| {
+                widgets::tag_chips(ui, &self.tags, &mut self.search.tag_filter);
                 let spacing = ui.spacing().item_spacing.x;
 
                 // `Ui::columns` делит доступную ширину на число колонок и
@@ -698,10 +699,10 @@ impl RustRim {
         } else {
             ("НЕАКТИВНЫЕ МОДЫ", theme::HEADER_LEFT)
         };
-        let (ids, query, search_id) = if is_active {
-            (&self.caches.active, &mut self.search.active_query, "active_search")
+        let (ids, query, search_id, elsewhere) = if is_active {
+            (&self.caches.active, &mut self.search.active_query, "active_search", self.caches.active_elsewhere)
         } else {
-            (&self.caches.inactive, &mut self.search.inactive_query, "inactive_search")
+            (&self.caches.inactive, &mut self.search.inactive_query, "inactive_search", self.caches.inactive_elsewhere)
         };
 
         let mut action = None;
@@ -713,6 +714,15 @@ impl RustRim {
                 ui.add_space(2.0);
                 widgets::search_bar(ui, query, search_id);
                 ui.add_space(2.0);
+                if ids.is_empty() && elsewhere > 0 {
+                    let other = if is_active { "неактивных" } else { "активных" };
+                    ui.label(
+                        RichText::new(format!("Здесь ничего, но среди {other} найдено: {elsewhere}"))
+                            .color(theme::TEXT_MUTED)
+                            .size(11.0)
+                            .italics(),
+                    );
+                }
                 action = ModList::new(
                     &self.db, ids, &self.caches.warn, &self.tags,
                     &mut self.selected, is_active,
