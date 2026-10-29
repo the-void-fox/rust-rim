@@ -247,7 +247,7 @@ pub fn write_mod_list(path: &Path, active_package_ids: &[String]) -> Result<()> 
     }
     out.push_str("\t</activeMods>\n");
     out.push_str("</ModsConfigData>\n");
-    std::fs::write(path, out)
+    crate::fs_util::write_atomic(path, out.as_bytes())
         .with_context(|| format!("cannot write mod list {:?}", path))
 }
 
@@ -274,7 +274,12 @@ pub fn write_mods_config(xml_path: &Path, active_package_ids: &[String]) -> Resu
     }
     out.push_str("</ModsConfigData>\n");
 
-    std::fs::write(xml_path, out)
+    // Одна резервная копия предыдущего списка: если что-то пойдёт не так
+    // уже после записи, порядок модов можно вернуть руками.
+    if xml_path.exists() {
+        let _ = std::fs::copy(xml_path, xml_path.with_extension("xml.bak"));
+    }
+    crate::fs_util::write_atomic(xml_path, out.as_bytes())
         .with_context(|| format!("cannot write {:?}", xml_path))
 }
 

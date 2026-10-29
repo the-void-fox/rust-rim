@@ -148,6 +148,8 @@ pub fn scan_local_mods(mods_dir: &Path) -> Vec<ModEntry> {
     let mut dirs: Vec<PathBuf> = entries.flatten()
         .map(|e| e.path())
         .filter(|p| p.is_dir() && p.join("About").join("About.xml").exists())
+        // Недоделанная замена мода после аварии (см. fs_util::replace_dir).
+        .filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(".rust-rim-")))
         .collect();
     dirs.sort();
 
