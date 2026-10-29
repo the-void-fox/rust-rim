@@ -50,9 +50,9 @@ rust-rim написан на **Rust** — системном языке с на�
 
 | Платформа | Файл |
 |---|---|
-| Linux (бинарник) | `rust-rim-1.3.1-linux-x86_64` |
-| Linux (AppImage) | `rust-rim-1.3.1-x86_64.AppImage` |
-| Windows | `rust-rim-1.3.1-windows-x86_64.exe` |
+| Linux (бинарник) | `rust-rim-1.4.0-linux-x86_64` |
+| Linux (AppImage) | `rust-rim-1.4.0-x86_64.AppImage` |
+| Windows | `rust-rim-1.4.0-windows-x86_64.exe` |
 
 ### Сборка из исходников
 
