@@ -28,8 +28,11 @@ impl Default for Collections {
 
 impl Collections {
     pub fn new() -> Self {
+        let mut browse = Browse::new(workshop_api::fetch_collections_page);
+        // У сборок нет типа «мод / перевод / сценарий» — только версия.
+        browse.show_kind = false;
         Self {
-            browse: Browse::new(workshop_api::fetch_collections_page),
+            browse,
             downloading: None,
             job: Job::Idle,
             notice: None,

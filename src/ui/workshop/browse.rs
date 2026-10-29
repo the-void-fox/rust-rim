@@ -8,7 +8,7 @@
 use egui::{Frame, Margin, RichText, Stroke, Vec2};
 
 use crate::job::Job;
-use crate::steam::workshop_api::{CollectionItem, SortOrder, WorkshopItem};
+use crate::steam::workshop_api::{self, CollectionItem, SortOrder, WorkshopItem};
 use crate::ui::{fit_width, theme};
 
 use super::image_cache::ImageCache;
@@ -28,7 +28,7 @@ impl Card for CollectionItem {
 }
 
 /// Как получить страницу результатов. У обоих запросов одинаковая форма.
-type Fetcher<T> = fn(&str, u32, SortOrder) -> anyhow::Result<(Vec<T>, bool)>;
+type Fetcher<T> = fn(&str, u32, SortOrder, &[String]) -> anyhow::Result<(Vec<T>, bool)>;
 
 /// Состояние списка для отрисовки.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -44,6 +44,11 @@ pub enum Status<'a> {
 pub struct Browse<T: 'static> {
     pub search: String,
     pub sort: SortOrder,
+    /// Фильтр по версии игры (тег мастерской), `None` — любая.
+    pub version: Option<&'static str>,
+    /// Фильтр по типу предмета; у сборок типа нет, см. `show_kind`.
+    pub kind: Option<&'static str>,
+    pub show_kind: bool,
     pub page: u32,
     pub has_prev: bool,
     pub has_next: bool,
@@ -61,6 +66,9 @@ impl<T: Card + Clone + Send + 'static> Browse<T> {
         Self {
             search: String::new(),
             sort: SortOrder::Trending,
+            version: None,
+            kind: None,
+            show_kind: true,
             page: 1,
             has_prev: false,
             has_next: false,
@@ -120,10 +128,11 @@ impl<T: Card + Clone + Send + 'static> Browse<T> {
     /// Запускает запрос страницы.
     pub fn fetch(&mut self) {
         let (query, page, sort, fetcher) = (self.search.clone(), self.page, self.sort, self.fetcher);
+        let tags: Vec<String> = self.version.into_iter().chain(self.kind).map(str::to_string).collect();
         self.started = true;
         self.has_prev = page > 1;
         self.error = None;
-        self.job = Job::spawn(move || fetcher(&query, page, sort).map_err(|e| e.to_string()));
+        self.job = Job::spawn(move || fetcher(&query, page, sort, &tags).map_err(|e| e.to_string()));
     }
 
     /// Подгружает первую страницу при первом показе вкладки.
@@ -164,6 +173,16 @@ pub fn search_bar<T: Card + Clone + Send + 'static>(
 
                 ui.add_space(6.0);
                 if sort_combo(ui, &format!("{id_salt}_sort"), &mut browse.sort) {
+                    browse.page = 1;
+                    refetch = true;
+                }
+                if tag_combo(ui, &format!("{id_salt}_ver"), "Любая версия", workshop_api::GAME_VERSIONS, &mut browse.version) {
+                    browse.page = 1;
+                    refetch = true;
+                }
+                if browse.show_kind
+                    && tag_combo(ui, &format!("{id_salt}_kind"), "Любой тип", workshop_api::ITEM_KINDS, &mut browse.kind)
+                {
                     browse.page = 1;
                     refetch = true;
                 }
@@ -322,6 +341,32 @@ fn sort_combo(ui: &mut egui::Ui, id: &str, sort: &mut SortOrder) -> bool {
                 if ui.selectable_label(*sort == s, RichText::new(s.label()).size(11.0)).clicked() {
                     *sort = s;
                     changed = true;
+                }
+            }
+        });
+    changed
+}
+
+/// Выбор одного тега мастерской из списка или «любой». `true` — выбор изменился.
+fn tag_combo(
+    ui: &mut egui::Ui,
+    id: &str,
+    any: &str,
+    options: &[&'static str],
+    value: &mut Option<&'static str>,
+) -> bool {
+    let mut changed = false;
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(RichText::new(value.unwrap_or(any)).color(theme::TEXT_MUTED).size(11.0))
+        .show_ui(ui, |ui| {
+            if ui.selectable_label(value.is_none(), RichText::new(any).size(11.0)).clicked() {
+                changed = value.is_some();
+                *value = None;
+            }
+            for &opt in options {
+                if ui.selectable_label(*value == Some(opt), RichText::new(opt).size(11.0)).clicked() {
+                    changed = *value != Some(opt);
+                    *value = Some(opt);
                 }
             }
         });

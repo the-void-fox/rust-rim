@@ -66,6 +66,13 @@ impl SortOrder {
     ];
 }
 
+/// Версии игры, которыми помечают моды в мастерской RimWorld. Steam объявляет
+/// их сам (declared_tags), но список меняется раз в год — проще держать здесь.
+pub const GAME_VERSIONS: &[&str] = &["1.7", "1.6", "1.5", "1.4", "1.3", "1.2", "1.1", "1.0"];
+
+/// Тип предмета: тоже тег мастерской.
+pub const ITEM_KINDS: &[&str] = &["Mod", "Translation", "Scenario"];
+
 // ─── Запрос к Steam Workshop ─────────────────────────────────────────────────
 //
 // Поиска по мастерской без ключа у Steam нет: QueryFiles отвечает 403. Поэтому
@@ -113,8 +120,9 @@ pub fn fetch_workshop_page(
     query: &str,
     page: u32,
     sort: SortOrder,
+    tags: &[String],
 ) -> Result<(Vec<WorkshopItem>, bool)> {
-    let (found, next) = search(Section::Items, query, page, sort)?;
+    let (found, next) = search(Section::Items, query, page, sort, tags)?;
     let items = found
         .into_iter()
         .map(|f| WorkshopItem { id: f.id, title: f.title, author: f.author, preview_url: f.preview_url })
@@ -124,20 +132,22 @@ pub fn fetch_workshop_page(
 
 /// Ключ есть — сначала официальный API; не вышло — страница. И наоборот
 /// без ключа. Ошибку показываем ту, что объясняет больше.
-fn search(section: Section, query: &str, page: u32, sort: SortOrder) -> Result<(Vec<Found>, bool)> {
+/// `tags` — обязательные теги мастерской (версия игры, тип): предмет должен
+/// иметь их все.
+fn search(section: Section, query: &str, page: u32, sort: SortOrder, tags: &[String]) -> Result<(Vec<Found>, bool)> {
     let Some(key) = api_key() else {
-        return search_page(section, query, page, sort).map_err(|e| {
+        return search_page(section, query, page, sort, tags).map_err(|e| {
             anyhow!("{e}\nЕсли так продолжится — укажите ключ Steam Web API в настройках (вкладка «Поведение»).")
         });
     };
-    match search_api(&key, section, query, page, sort) {
+    match search_api(&key, section, query, page, sort, tags) {
         Ok(r) => Ok(r),
-        Err(api_err) => search_page(section, query, page, sort)
+        Err(api_err) => search_page(section, query, page, sort, tags)
             .map_err(|page_err| anyhow!("Steam Web API: {api_err}\nСтраница мастерской: {page_err}")),
     }
 }
 
-fn search_page(section: Section, query: &str, page: u32, sort: SortOrder) -> Result<(Vec<Found>, bool)> {
+fn search_page(section: Section, query: &str, page: u32, sort: SortOrder, tags: &[String]) -> Result<(Vec<Found>, bool)> {
     let section = match section {
         Section::Items => "readytouseitems",
         Section::Collections => "collections",
@@ -147,10 +157,13 @@ fn search_page(section: Section, query: &str, page: u32, sort: SortOrder) -> Res
     } else {
         format!("&searchtext={}", url_encode(query))
     };
-    let url = format!(
+    let mut url = format!(
         "https://steamcommunity.com/workshop/browse/?appid={APP_ID}{search_part}&section={section}&browsesort={}&p={page}",
         sort.as_param()
     );
+    for tag in tags {
+        let _ = write!(url, "&requiredtags%5B%5D={}", url_encode(tag));
+    }
 
     let html = fetch_html(&url)?;
     let roots = json_roots(&html);
@@ -193,7 +206,7 @@ fn search_page(section: Section, query: &str, page: u32, sort: SortOrder) -> Res
 /// Столько записей на странице у браузера мастерской.
 const PAGE_SIZE: u32 = 30;
 
-fn search_api(key: &str, section: Section, query: &str, page: u32, sort: SortOrder) -> Result<(Vec<Found>, bool)> {
+fn search_api(key: &str, section: Section, query: &str, page: u32, sort: SortOrder, tags: &[String]) -> Result<(Vec<Found>, bool)> {
     // EPublishedFileQueryType и EPublishedFileInfoMatchingFileType из Steamworks.
     let query_type = match sort {
         SortOrder::Trending        => 3,
@@ -212,6 +225,10 @@ fn search_api(key: &str, section: Section, query: &str, page: u32, sort: SortOrd
         url_encode(key),
         url_encode(query),
     );
+    let mut url = url;
+    for (i, tag) in tags.iter().enumerate() {
+        let _ = write!(url, "&requiredtags%5B{i}%5D={}", url_encode(tag));
+    }
     let json = get_json_keyed(&url, key)?;
     let resp = &json["response"];
     let details = resp["publishedfiledetails"].as_array().cloned().unwrap_or_default();
@@ -337,8 +354,9 @@ pub fn fetch_collections_page(
     query: &str,
     page: u32,
     sort: SortOrder,
+    tags: &[String],
 ) -> Result<(Vec<CollectionItem>, bool)> {
-    let (found, next) = search(Section::Collections, query, page, sort)?;
+    let (found, next) = search(Section::Collections, query, page, sort, tags)?;
     let items = found
         .into_iter()
         .map(|f| CollectionItem { id: f.id, title: f.title, author: f.author, preview_url: f.preview_url })
