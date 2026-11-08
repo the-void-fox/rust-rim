@@ -86,7 +86,7 @@ pub fn show(ctx: &egui::Context, state: &mut TestUi, run: Option<&TestRun>) -> R
                     RichText::new(
                         tr("Прогон запускает игру с -quicktest: она грузит текущую сборку, \
                          генерирует карту и пишет лог, по которому выносится вердикт.\n\n\
-                         ModsConfig.xml на время прогона подменяется и возвращается обратно."),
+                         Ваши ModsConfig.xml и настройки не меняются: у прогона своя папка данных с их копией."),
                     )
                     .color(theme::TEXT_MUTED)
                     .size(11.5),

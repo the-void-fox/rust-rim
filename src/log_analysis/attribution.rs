@@ -2,12 +2,24 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::mod_data::{ModDb, ModEntry, ModId, Profile};
-use super::{LogIssue, Suspect};
+use super::{is_vanilla_method, LogIssue, Suspect, VANILLA};
+use super::parser::method_path;
 use crate::trf;
 
-// Веса сигналов
+// Веса сигналов. Главное здесь — позиция кадра: исключение брошено в
+// верхнем кадре, и мод, который его переписал или в нём исполняется, почти
+// всегда и есть причина. Патчи на корнях стека (`Verse.Root.OnGUI`) стоят у
+// каждой ошибки интерфейса и уликой не считаются.
+const SCORE_PATCH_TOP_TRANSPILER: i32 = 8;
+const SCORE_PATCH_TOP: i32 = 5;
+const SCORE_PATCH_NEAR: i32 = 2;
+/// Патчи глубже этого кадра не считаются.
+const PATCH_DEPTH: usize = 3;
+const SCORE_TOP_MOD_FRAME: i32 = 6;
+const SCORE_MOD_FRAME: i32 = 2;
+const SCORE_FAILED_PATCH: i32 = 6;
 const SCORE_PATH:      i32 = 5;
-const SCORE_NAMESPACE: i32 = 4;
+const SCORE_TYPE_IN_TEXT: i32 = 4;
 const SCORE_PACKAGE:   i32 = 3;
 const SCORE_NAME:      i32 = 1;
 
@@ -16,13 +28,8 @@ const MAX_EVIDENCE: usize = 4;
 /// Сканируем на упоминания packageId/имён только первые строки записи
 /// (стек покрыт отдельно), чтобы не гонять 900 contains по всему тексту.
 const MAX_SCAN_LINES: usize = 20;
-
-/// Ванильные и системные неймспейсы — не считаются виновниками.
-const VANILLA: &[&str] = &[
-    "system", "verse", "rimworld", "unityengine", "unity", "harmonylib",
-    "mono", "microsoft", "tmpro", "steamworks", "ludeontk", "mscorlib",
-    "0harmony", "ionic", "newtonsoft", "runtimeaudioclip", "object",
-];
+/// Строк сообщения, где ищутся имена типов: заголовок и текст исключения.
+const MESSAGE_LINES: usize = 3;
 
 #[derive(Clone)]
 struct ModRef {
@@ -41,6 +48,8 @@ pub struct ModIndex {
     packages: Vec<(String, usize)>,
     /// (имя мода как в About.xml, индекс) — только достаточно длинные имена
     names: Vec<(String, usize)>,
+    /// lowercase имя мода → индекс: для «[Имя мода] Patch operation … failed»
+    exact_names: HashMap<String, usize>,
 }
 
 /// Собирает имена DLL мода: Assemblies/*.dll в корне и в версионных
@@ -87,12 +96,14 @@ impl ModIndex {
         let mut folder: HashMap<String, usize> = HashMap::new();
         let mut packages = Vec::new();
         let mut names = Vec::new();
+        let mut exact_names = HashMap::new();
 
         for (i, (m, dlls)) in parts.iter().enumerate() {
+            let is_active = profile.is_active(&m.package_id);
             refs.push(ModRef {
                 package_id: m.package_id.clone(),
                 name: m.name.clone(),
-                is_active: profile.is_active(&m.package_id),
+                is_active,
             });
             if let Some(f) = m.path.file_name().and_then(|s| s.to_str()) {
                 folder.insert(f.to_lowercase(), i);
@@ -103,36 +114,53 @@ impl ModIndex {
             if m.name.len() >= 8 {
                 names.push((m.name.clone(), i));
             }
+            if !m.name.trim().is_empty() {
+                exact_names.entry(m.name.trim().to_lowercase()).or_insert(i);
+            }
             for stem in dlls {
                 let key = stem.to_lowercase();
-                if !VANILLA.contains(&key.as_str()) {
-                    dll.entry(key).or_insert(i);
+                if VANILLA.contains(&key.as_str()) {
+                    continue;
+                }
+                // Одна и та же DLL бывает у нескольких модов (общие
+                // библиотеки, старые копии). Активный мод важнее: в игре
+                // загружен именно он, а выключенный подозревать бессмысленно.
+                match dll.get(&key) {
+                    Some(&prev) if refs[prev].is_active || !is_active => {}
+                    _ => {
+                        dll.insert(key, i);
+                    }
                 }
             }
         }
 
-        Self { refs, dll, folder, packages, names }
+        Self { refs, dll, folder, packages, names, exact_names }
     }
-}
 
-/// Извлекает «путь метода» из кадра стека:
-/// `Ns.Class.Method (args) [0x...]` → `Ns.Class.Method`
-/// `(wrapper dynamic-method) Verse.Pawn.Verse.Pawn.SpawnSetup_Patch2(...)` → часть после wrapper.
-fn method_path(frame: &str) -> &str {
-    let mut s = frame;
-    if let Some(rest) = s.strip_prefix("(wrapper dynamic-method)") {
-        s = rest.trim_start();
-    } else if let Some(rest) = s.strip_prefix("(wrapper") {
-        // другие wrapper-формы: "(wrapper xxx) Ns.Class:Method (...)"
-        s = rest.split_once(')').map(|(_, r)| r).unwrap_or(rest).trim_start();
+    /// Мод, чья DLL названа как корень неймспейса: `CameraPlus.Tools.X` →
+    /// CameraPlus.dll. Сначала двухсегментный (`VFE.Core`), потом корень.
+    fn by_namespace(&self, path: &str) -> Option<usize> {
+        if is_vanilla_method(path) {
+            return None;
+        }
+        let (root, two) = namespace_roots(path);
+        self.dll.get(&two).or_else(|| self.dll.get(&root)).copied()
     }
-    let end = s.find([' ', '(']).unwrap_or(s.len());
-    &s[..end]
+
+    /// Мод по Harmony-id: совпадение с packageId, иначе как неймспейс.
+    fn by_owner(&self, owner: &str) -> Option<usize> {
+        let lower = owner.to_lowercase();
+        self.packages
+            .iter()
+            .find(|(p, _)| p.eq_ignore_ascii_case(&lower))
+            .map(|(_, i)| *i)
+            .or_else(|| self.by_namespace(owner))
+    }
 }
 
 /// Корневые сегменты пути метода: ("Root", "Root.Second").
 fn namespace_roots(path: &str) -> (String, String) {
-    let mut segs = path.split(['.', ':']);
+    let mut segs = path.split(['.', ':', '+']);
     let root = segs.next().unwrap_or("").to_lowercase();
     let second = segs.next().unwrap_or("").to_lowercase();
     let two = if second.is_empty() { root.clone() } else { format!("{root}.{second}") };
@@ -148,6 +176,18 @@ fn path_segment_after<'a>(lower_line: &'a str, marker: &str) -> Option<&'a str> 
     (end > 0).then(|| &rest[..end])
 }
 
+/// Имя мода из `[Имя мода] Patch operation … failed`.
+fn failed_patch_owner(title: &str) -> Option<&str> {
+    let rest = title.strip_prefix('[')?;
+    let (name, _) = rest.rsplit_once("] Patch operation")?;
+    Some(name.trim())
+}
+
+/// Короткая форма метода для улик.
+fn short(method: &str) -> String {
+    method.chars().take(80).collect()
+}
+
 /// Заполняет issue.suspects и issue.harmony_hint.
 pub fn attribute(issue: &mut LogIssue, index: &ModIndex) {
     // индекс мода → (счёт, улики)
@@ -160,20 +200,72 @@ pub fn attribute(issue: &mut LogIssue, index: &ModIndex) {
         }
     };
 
-    // 1. Кадры стека → неймспейс → DLL мода
-    for frame in &issue.frames {
-        let path = method_path(frame);
-        let (root, two) = namespace_roots(path);
-        if root.is_empty() || VANILLA.contains(&root.as_str()) {
+    // 1. Кадры стека: код мода и Harmony-патчи на ванильных методах.
+    let mut seen_mod_frame: Vec<usize> = Vec::new();
+    for (pos, frame) in issue.frames.iter().enumerate() {
+        if let Some(i) = index.by_namespace(&frame.method) {
+            let first = seen_mod_frame.is_empty();
+            if !seen_mod_frame.contains(&i) {
+                let score = if first { SCORE_TOP_MOD_FRAME } else { SCORE_MOD_FRAME };
+                add(i, score, trf!("стек: {short}", short = short(&frame.method)));
+                seen_mod_frame.push(i);
+            }
+        }
+
+        if pos >= PATCH_DEPTH {
             continue;
         }
-        if let Some(&i) = index.dll.get(&two).or_else(|| index.dll.get(&root)) {
-            let short: String = path.chars().take(80).collect();
-            add(i, SCORE_NAMESPACE, trf!("стек: {short}", short));
+        // Один мод на одном кадре считается один раз — по самому сильному
+        // патчу: PREFIX+POSTFIX+FINALIZER одного мода не втрое весомее.
+        let mut best: HashMap<usize, (i32, &str)> = HashMap::new();
+        for patch in &frame.patches {
+            let Some(i) = index.by_namespace(&patch.class).or_else(|| index.by_owner(&patch.owner)) else {
+                continue;
+            };
+            let score = match (pos, patch.kind.as_str()) {
+                (0, "TRANSPILER") => SCORE_PATCH_TOP_TRANSPILER,
+                (0, _) => SCORE_PATCH_TOP,
+                _ => SCORE_PATCH_NEAR,
+            };
+            let slot = best.entry(i).or_insert((0, ""));
+            if score > slot.0 {
+                *slot = (score, patch.kind.as_str());
+            }
+        }
+        for (i, (score, kind)) in best {
+            let frame_no = pos + 1;
+            add(i, score, trf!("{kind} на кадре {frame_no}: {method}", kind, frame_no, method = short(&frame.method)));
         }
     }
 
-    // 2-4. Текстовые сигналы: пути, packageId, названия
+    // 2. «[Имя мода] Patch operation … failed» — мод назвал себя сам.
+    if let Some(name) = failed_patch_owner(&issue.title) {
+        if let Some(&i) = index.exact_names.get(&name.to_lowercase()) {
+            add(i, SCORE_FAILED_PATCH, trf!("патч мода «{name}» не применился", name));
+        }
+    }
+
+    // 3. Типы из DLL мода, названные в самом сообщении:
+    //    «Could not load type of field 'IsoRim.AlienFigures:local'…».
+    let message = issue
+        .full_text
+        .lines()
+        .filter(|l| !l.starts_with([' ', '\t']) && !l.starts_with("[Ref "))
+        .take(MESSAGE_LINES);
+    for line in message {
+        for token in line.split(|c: char| !(c.is_alphanumeric() || c == '.' || c == '_')) {
+            let token = token.trim_matches('.');
+            if token.len() < 5 || !token.contains('.') {
+                continue;
+            }
+            if let Some(i) = index.by_namespace(token) {
+                let name = short(token);
+                add(i, SCORE_TYPE_IN_TEXT, trf!("тип мода в тексте: {name}", name));
+            }
+        }
+    }
+
+    // 4-6. Текстовые сигналы: пути, packageId, названия
     for line in issue.full_text.lines().take(MAX_SCAN_LINES) {
         let lower = line.to_lowercase();
 
@@ -209,17 +301,20 @@ pub fn attribute(issue: &mut LogIssue, index: &ModIndex) {
             }
         })
         .collect();
-    suspects.sort_by(|a, b| b.score.cmp(&a.score).then(a.name.cmp(&b.name)));
+    // Активные раньше выключенных: в игре был загружен именно активный.
+    suspects.sort_by(|a, b| {
+        b.is_active.cmp(&a.is_active).then(b.score.cmp(&a.score)).then(a.name.cmp(&b.name))
+    });
     suspects.truncate(MAX_SUSPECTS);
     issue.suspects = suspects;
 
     // След Harmony без явного виновника: пропатченный метод в кадре
     if issue.suspects.is_empty() {
         issue.harmony_hint = issue.frames.iter().find_map(|f| {
-            let path = method_path(f);
+            let path = method_path(&f.method);
             let has_patch = path.rsplit(['.', ':']).next()
                 .is_some_and(|m| m.contains("_Patch"));
-            has_patch.then(|| {
+            (has_patch || f.patched).then(|| {
                 let clean = path.trim_end_matches(|c: char| c.is_ascii_digit())
                     .trim_end_matches("_Patch");
                 undouble(clean)

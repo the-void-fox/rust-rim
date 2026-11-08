@@ -29,33 +29,74 @@ use crate::testing::Verdict;
 pub enum Target {
     /// Любой провал: прогон не закончился успехом.
     AnyFailure,
-    /// Конкретная запись из лога исходного прогона.
+    /// Причина ошибки из исходного прогона ([`LogIssue::cause`]).
     ///
     /// Точнее, чем «любой провал»: урезанная сборка может падать по своей
     /// причине (не хватило чего-то, что мы выключили), и такой провал за
     /// воспроизведение считать нельзя.
-    Issue(String),
+    ///
+    /// Сравнивается именно причина, а не заголовок: в заголовках имена
+    /// пешек и координаты, и в следующем прогоне та же ошибка выглядит
+    /// иначе. С заголовком цель не совпадала ни разу, и поиск перебирал
+    /// все разбиения впустую — 67 прогонов на 19 модах.
+    Cause {
+        key: String,
+        /// Заголовок самой частой записи с этой причиной — для показа.
+        title: String,
+    },
 }
 
 impl Target {
-    /// Выбирает цель по разбору исходного прогона.
-    ///
-    /// Если в логе есть ошибки — ищем первую из них; она же самая частая,
-    /// потому что `analyze` сортирует записи по убыванию частоты.
+    /// Выбирает цель по разбору исходного прогона: причину, за которой
+    /// больше всего вхождений ошибок.
     pub fn from_issues(issues: &[LogIssue]) -> Self {
-        issues
-            .iter()
-            .find(|i| i.severity == Severity::Error)
-            .map(|i| Target::Issue(i.title.clone()))
-            .unwrap_or(Target::AnyFailure)
+        // причина → (вхождений, самая частая запись)
+        let mut causes: Vec<(&str, usize, &LogIssue)> = Vec::new();
+        for issue in issues.iter().filter(|i| i.severity == Severity::Error) {
+            match causes.iter_mut().find(|(key, _, _)| *key == issue.cause) {
+                Some((_, count, top)) => {
+                    *count += issue.count;
+                    if issue.count > top.count {
+                        *top = issue;
+                    }
+                }
+                None => causes.push((issue.cause.as_str(), issue.count, issue)),
+            }
+        }
+        // При равенстве — та, что встретилась раньше.
+        let mut best: Option<(&str, usize, &LogIssue)> = None;
+        for c in causes {
+            if best.is_none_or(|b| c.1 > b.1) {
+                best = Some(c);
+            }
+        }
+        best.map(|(key, _, issue)| Target::Cause {
+            key: key.to_string(),
+            title: issue.title.clone(),
+        })
+        .unwrap_or(Target::AnyFailure)
     }
 
     /// Воспроизвелась ли проблема в очередном прогоне.
     pub fn matches(&self, verdict: &Verdict, issues: &[LogIssue]) -> bool {
         match self {
             Target::AnyFailure => !matches!(verdict, Verdict::Passed),
-            Target::Issue(title) => issues.iter().any(|i| &i.title == title),
+            Target::Cause { key, .. } => issues
+                .iter()
+                .any(|i| i.severity == Severity::Error && &i.cause == key),
         }
+    }
+
+    /// Записи прогона, которые и есть искомая проблема.
+    pub fn issues<'a>(&self, issues: &'a [LogIssue]) -> Vec<&'a LogIssue> {
+        issues
+            .iter()
+            .filter(|i| i.severity == Severity::Error)
+            .filter(|i| match self {
+                Target::AnyFailure => true,
+                Target::Cause { key, .. } => &i.cause == key,
+            })
+            .collect()
     }
 }
 
@@ -117,6 +158,9 @@ pub enum Kind {
     Rest,
     /// Проверка, нужна ли подсказка вообще.
     Recheck,
+    /// Повтор полной сборки перед сужением: воспроизводится ли проблема
+    /// вообще. Этот набор выдаёт не поиск, а [`super::Hunt`].
+    Confirm,
 }
 
 /// Один сделанный шаг.
@@ -250,11 +294,21 @@ impl Search {
                 _ => candidates.push(id.clone()),
             }
         }
-        Self::new(candidates, base, Deps::from_db(db, profile), hint)
+        let mut search = Self::new(candidates, base, Deps::from_db(db, profile), hint);
+        // Наборы выстраиваются по настоящему порядку сборки, а не «ваниль,
+        // потом остальное»: Harmony и Prepatcher стоят перед Core, и после
+        // него они грузились бы в каждом прогоне поиска иначе, чем у игрока.
+        search.order = profile.order().to_vec();
+        search
     }
 
     pub fn is_done(&self) -> bool {
         self.phase == Phase::Done
+    }
+
+    /// Вся исходная сборка, вместе с ванилью, в её порядке загрузки.
+    pub fn full_build(&self) -> Vec<ModId> {
+        self.order.clone()
     }
 
     /// Найденный набор. Пока поиск идёт — текущее приближение.
@@ -426,6 +480,8 @@ impl Search {
                 self.index = 0;
             }
             (Kind::Part | Kind::Rest, false) => self.index += 1,
+            // Поиск такой набор не выдаёт.
+            (Kind::Confirm, _) => {}
         }
     }
 
@@ -718,24 +774,82 @@ mod tests {
         assert_eq!(closed, ids(&["a", "b", "c"]));
     }
 
-    #[test]
-    fn target_matches_the_original_issue_only() {
-        let issue = |title: &str| LogIssue {
+    fn issue(title: &str, cause: &str, count: usize) -> LogIssue {
+        LogIssue {
             severity: Severity::Error,
             title: title.to_string(),
             full_text: title.to_string(),
-            count: 1,
+            count,
             frames: Vec::new(),
+            exception: None,
+            cause: cause.to_string(),
             suspects: Vec::new(),
             harmony_hint: None,
+        }
+    }
+
+    #[test]
+    fn sets_follow_the_real_load_order_with_vanilla_in_place() {
+        use crate::mod_data::{ModEntry, ModSource};
+        let entry = |id: &str, deps: &[&str]| ModEntry {
+            name: id.to_string(),
+            package_id: ModId::new(id),
+            version: String::new(),
+            author: String::new(),
+            supported_versions: vec!["1.6".into()],
+            path: std::path::PathBuf::from(format!("/mods/{id}")),
+            source: if id == "ludeon.rimworld" { ModSource::Core } else { ModSource::Local },
+            dependencies: ids(deps),
+            dependency_sources: Vec::new(),
+            load_after: Vec::new(),
+            load_before: Vec::new(),
+            incompatible_with: Vec::new(),
+            description: String::new(),
+            preview_path: None,
         };
+        let db = ModDb::build(vec![
+            entry("brrainz.harmony", &[]),
+            entry("ludeon.rimworld", &[]),
+            entry("a", &["brrainz.harmony"]),
+            entry("b", &[]),
+        ]);
+        let mut profile = Profile::new();
+        for id in ["brrainz.harmony", "ludeon.rimworld", "a", "b"] {
+            profile.activate(ModId::new(id));
+        }
+        let mut search = Search::from_profile(&db, &profile, Vec::new());
+        // Полная сборка — с ванилью и в порядке игрока.
+        assert_eq!(search.full_build(), ids(&["brrainz.harmony", "ludeon.rimworld", "a", "b"]));
+        // Harmony остаётся перед Core и в урезанных наборах.
+        let first = search.next().unwrap();
+        let harmony = first.active.iter().position(|id| id.as_str() == "brrainz.harmony");
+        let core = first.active.iter().position(|id| id.as_str() == "ludeon.rimworld");
+        if let (Some(h), Some(c)) = (harmony, core) {
+            assert!(h < c, "{:?}", first.active);
+        }
+        assert!(core.is_some(), "ваниль в каждом наборе: {:?}", first.active);
+    }
 
-        let target = Target::from_issues(&[issue("боль")]);
-        assert_eq!(target, Target::Issue("боль".into()));
+    #[test]
+    fn target_matches_the_original_cause_only() {
+        let target = Target::from_issues(&[issue("боль", "nre|patched:A", 1)]);
+        assert_eq!(target, Target::Cause { key: "nre|patched:A".into(), title: "боль".into() });
 
-        assert!(target.matches(&Verdict::LoadedWithErrors, &[issue("боль")]));
+        // Тот же мод уронил другой метод, и заголовок другой — это та же ошибка.
+        assert!(target.matches(&Verdict::LoadedWithErrors, &[issue("другая боль", "nre|patched:A", 3)]));
         // Урезанная сборка упала по своей причине — это не воспроизведение.
-        assert!(!target.matches(&Verdict::Crashed { code: Some(1) }, &[issue("другая")]));
+        assert!(!target.matches(&Verdict::Crashed { code: Some(1) }, &[issue("боль", "nre|patched:B", 1)]));
+    }
+
+    #[test]
+    fn target_is_the_cause_with_most_occurrences() {
+        // Одна причина разбита Ref на несколько записей: считается сумма.
+        let target = Target::from_issues(&[
+            issue("частая запись другой причины", "B", 50),
+            issue("Exception ticking Elk", "A", 40),
+            issue("Exception ticking Josh", "A", 30),
+        ]);
+        assert_eq!(target, Target::Cause { key: "A".into(), title: "Exception ticking Elk".into() });
     }
 
     #[test]

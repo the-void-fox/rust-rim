@@ -1,7 +1,8 @@
 // Сквозной прогон автотеста на реальной установке:
 //   cargo run --example quicktest_smoke -- <папка игры> <папка модов>
 //
-// ModsConfig.xml на время прогона подменяется и возвращается на место.
+// Конфиг игрока не трогается: прогон идёт в своей папке данных
+// (<данные игры>/RustRim/test) через -savedatafolder.
 
 use rust_rim::game::{launch, paths};
 use rust_rim::mod_data::{parse_mods_config, scan_dlc_mods, scan_local_mods, ModDb, Profile};
@@ -15,7 +16,8 @@ fn main() {
 
     let prefix = paths::find_prefixes().into_iter().next().expect("префикс не найден");
     let config_dir = paths::config_dir(&prefix.data_dir);
-    let log_file = prefix.data_dir.join("rustrim-quicktest.log");
+    let save_data = prefix.data_dir.join("RustRim").join("test");
+    let log_file = save_data.join("quicktest.log");
     println!("Префикс: {}\nЛог:     {}", prefix.path.display(), log_file.display());
 
     let mut entries = scan_dlc_mods(game);
@@ -26,11 +28,14 @@ fn main() {
     println!("Сборка: {} модов из каталога в {}\n", profile.len(), db.len());
 
     let settings = launch::LaunchSettings::default();
-    let mode = launch::Mode::QuickTest { log_file: log_file.clone() };
+    let mode = launch::Mode::QuickTest {
+        log_file: log_file.clone(),
+        save_data: Some(save_data.clone()),
+    };
     let plan = launch::plan(game, &settings, &mode).expect("не удалось собрать команду");
 
     let exe = paths::find_executable(game).expect("игра не найдена");
-    let mut cfg = Config::new(config_dir, log_file);
+    let mut cfg = Config::new(config_dir, save_data, log_file);
     cfg.timeout = std::time::Duration::from_secs(300);
     cfg.cleanup = Some((prefix.path.clone(), exe.path().to_path_buf()));
     println!("Порог тишины: {:?}, предел: {:?}\n", cfg.settle, cfg.timeout);

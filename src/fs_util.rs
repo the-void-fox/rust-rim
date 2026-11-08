@@ -124,7 +124,7 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 }
 
 /// Рекурсивно копирует директорию `src` в `dst`.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;

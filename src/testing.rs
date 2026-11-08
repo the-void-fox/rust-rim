@@ -14,6 +14,11 @@
 //!   распознаётся отдельно, а ожидание тишины ограничено сверху.
 //!
 //! Поэтому вердикт выносится по тишине в логе, а не по завершению процесса.
+//!
+//! Конфиг игрока прогон не трогает. Игра получает свою папку данных через
+//! `-savedatafolder`: туда кладутся тестируемый ModsConfig.xml и копия
+//! настроек игрока, а несколько настроек переопределяются — без этого игра
+//! встаёт на паузу или замирает, и прогон «молчит», как будто всё чисто.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -24,6 +29,7 @@ use crate::game::teardown;
 use crate::log_analysis::{self, LogIssue, ModIndex, Severity};
 use crate::mod_data::{write_mods_config, ModDb, ModId, Profile};
 use crate::process::Run;
+use crate::trf;
 
 /// Сколько лог должен молчать, чтобы считать загрузку завершённой.
 pub const DEFAULT_SETTLE: Duration = Duration::from_secs(25);
@@ -49,8 +55,12 @@ const STORM_REPEATS: usize = 40;
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// Папка с ModsConfig.xml — туда кладётся тестируемая сборка.
+    /// Папка Config игрока. Из неё копируются настройки игры и модов;
+    /// сама она не меняется.
     pub config_dir: PathBuf,
+    /// Своя папка данных прогона — игра получает её через `-savedatafolder`.
+    /// Пересоздаётся перед каждым прогоном.
+    pub save_data: PathBuf,
     /// Куда игра пишет лог. Должен лежать внутри префикса: под umu игра
     /// работает в контейнере со своим `/tmp`.
     pub log_file: PathBuf,
@@ -64,9 +74,10 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn new(config_dir: PathBuf, log_file: PathBuf) -> Self {
+    pub fn new(config_dir: PathBuf, save_data: PathBuf, log_file: PathBuf) -> Self {
         Self {
             config_dir,
+            save_data,
             log_file,
             settle: DEFAULT_SETTLE,
             settle_cap: DEFAULT_SETTLE_CAP,
@@ -119,8 +130,6 @@ impl Verdict {
 pub struct TestRun {
     run: Run,
     config: Config,
-    /// Восстанавливает ModsConfig.xml даже при панике.
-    _guard: ConfigGuard,
     /// Состав прогоняемой сборки.
     active: Vec<ModId>,
     started: Instant,
@@ -133,17 +142,17 @@ pub struct TestRun {
 }
 
 impl TestRun {
-    /// Записывает сборку в ModsConfig.xml и запускает игру.
+    /// Готовит папку данных прогона со сборкой и запускает игру.
     ///
-    /// Оригинальный конфиг сохраняется и возвращается на место при
-    /// завершении прогона — в том числе при панике.
+    /// Команда должна передать игре ту же папку через `-savedatafolder` —
+    /// её собирает [`crate::game::launch::plan`] из `Mode::QuickTest`.
     pub fn start(
         command: Command,
         command_text: String,
         config: Config,
         active: &[ModId],
     ) -> io::Result<Self> {
-        let guard = ConfigGuard::install(&config.config_dir, active)?;
+        prepare_save_data(&config.config_dir, &config.save_data, active)?;
         // Старый лог мешает: по нему нельзя отличить прошлый прогон от текущего.
         let _ = std::fs::remove_file(&config.log_file);
 
@@ -152,7 +161,6 @@ impl TestRun {
         Ok(Self {
             run,
             config,
-            _guard: guard,
             active: active.to_vec(),
             started: now,
             log_len: 0,
@@ -328,54 +336,91 @@ fn verdict_from_log(log: &str) -> Verdict {
     }
 }
 
-// ─── Подмена ModsConfig.xml на время прогона ─────────────────────────────────
+// ─── Своя папка данных прогона ───────────────────────────────────────────────
 
-/// Кладёт тестируемую сборку в ModsConfig.xml и возвращает исходный файл
-/// на место при уничтожении.
-struct ConfigGuard {
-    path: PathBuf,
-    backup: PathBuf,
-    original: Option<Vec<u8>>,
-}
+/// Метка папки, которую прогон создал сам. Стирать можно только такую:
+/// путь к папке собирается из настроек, и ошибка в них не должна стоить
+/// игроку сохранений.
+const MARKER: &str = ".rustrim-test";
 
-impl ConfigGuard {
-    fn install(config_dir: &Path, active: &[ModId]) -> io::Result<Self> {
-        let path = config_dir.join("ModsConfig.xml");
-        let original = std::fs::read(&path).ok();
+/// Настройки игры, которые прогон переопределяет.
+///
+/// Всё это найдено на живых прогонах, и каждое без переопределения делает
+/// результат ложно-чистым:
+/// * `runInBackground` — после загрузки игра применяет настройку игрока, и
+///   без фокуса Unity перестаёт обновлять кадры: карта не генерируется,
+///   тики не идут, лог молчит, а тишина засчитывается как успех;
+/// * `automaticPauseMode` — по умолчанию игра сама встаёт на паузу при
+///   крупной угрозе: эталонный прогон замер на 305-м тике;
+/// * `pauseOnError` — пауза на первой же ошибке прячет все остальные.
+const PREFS_OVERRIDES: &[(&str, &str)] = &[
+    ("runInBackground", "True"),
+    ("automaticPauseMode", "Never"),
+    ("pauseOnError", "False"),
+];
 
-        // Копия на диске — страховка на случай, если приложение убьют
-        // посреди прогона и Drop не отработает.
-        let backup = config_dir.join("ModsConfig.xml.rustrim-backup");
-        if let Some(bytes) = &original {
-            std::fs::write(&backup, bytes)?;
+/// Пересоздаёт папку данных прогона: копия Config игрока, тестируемый
+/// список модов и переопределённые настройки.
+///
+/// Настройки модов (`Mod_*.xml`, подпапки Config) копируются как есть — от
+/// них зависит поведение модов, а значит и ошибки.
+fn prepare_save_data(config_dir: &Path, save_data: &Path, active: &[ModId]) -> io::Result<()> {
+    if save_data.exists() {
+        if save_data.join(MARKER).is_file() {
+            std::fs::remove_dir_all(save_data)?;
+        } else if std::fs::read_dir(save_data)?.next().is_some() {
+            return Err(io::Error::other(trf!(
+                "Папка {path} не пуста и создана не прогоном — стирать её не стану.",
+                path = save_data.display()
+            )));
         }
-
-        let ids: Vec<String> = active.iter().map(|id| id.as_str().to_string()).collect();
-        write_mods_config(&path, &ids).map_err(io::Error::other)?;
-
-        Ok(Self { path, backup, original })
     }
+    std::fs::create_dir_all(save_data)?;
+    std::fs::write(save_data.join(MARKER), b"")?;
+
+    let target = save_data.join("Config");
+    if config_dir.is_dir() {
+        crate::fs_util::copy_dir_recursive(config_dir, &target)?;
+    } else {
+        std::fs::create_dir_all(&target)?;
+    }
+
+    // Версия и knownExpansions берутся из скопированного файла игрока.
+    let ids: Vec<String> = active.iter().map(|id| id.as_str().to_string()).collect();
+    let mods_config = target.join("ModsConfig.xml");
+    write_mods_config(&mods_config, &ids).map_err(io::Error::other)?;
+    let _ = std::fs::remove_file(mods_config.with_extension("xml.bak"));
+
+    let prefs = target.join("Prefs.xml");
+    let text = std::fs::read_to_string(&prefs)
+        .unwrap_or_else(|_| "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<PrefsData>\n</PrefsData>\n".into());
+    std::fs::write(&prefs, override_prefs(&text))
 }
 
-impl Drop for ConfigGuard {
-    fn drop(&mut self) {
-        match &self.original {
-            Some(bytes) => {
-                if let Err(e) = std::fs::write(&self.path, bytes) {
-                    tracing::error!(
-                        "Не удалось вернуть ModsConfig.xml: {e}. Копия лежит в {:?}",
-                        self.backup,
-                    );
-                    return;
+/// Подставляет [`PREFS_OVERRIDES`] в текст Prefs.xml: меняет значение, если
+/// поле есть, и дописывает его перед `</PrefsData>`, если нет. Остальные
+/// настройки (язык, разрешение, режим разработчика) не трогаются.
+fn override_prefs(text: &str) -> String {
+    let mut out = text.to_string();
+    for (field, value) in PREFS_OVERRIDES {
+        let open = format!("<{field}>");
+        let close = format!("</{field}>");
+        let existing = out.find(&open).and_then(|start| {
+            let body = start + open.len();
+            out[body..].find(&close).map(|len| (body, body + len))
+        });
+        match existing {
+            Some((from, to)) => out.replace_range(from..to, value),
+            None => {
+                let line = format!("\t{open}{value}{close}\n");
+                match out.rfind("</PrefsData>") {
+                    Some(at) => out.insert_str(at, &line),
+                    None => out.push_str(&line),
                 }
             }
-            // Файла не было — не оставляем свой.
-            None => {
-                let _ = std::fs::remove_file(&self.path);
-            }
         }
-        let _ = std::fs::remove_file(&self.backup);
     }
+    out
 }
 
 #[cfg(test)]
@@ -428,7 +473,7 @@ mod tests {
         // именно так ведёт себя -quicktest.
         let t = Temp::new("ok");
         let log = t.0.join("game.log");
-        let mut cfg = Config::new(t.0.clone(), log.clone());
+        let mut cfg = Config::new(t.0.join("Config"), t.0.join("run"), log.clone());
         cfg.settle = Duration::from_millis(300);
 
         let cmd = fake_game(&log, "printf 'RimWorld 1.6.4633 rev1261\\nUnloading 99 unused Assets to reduce memory usage.\\n' > '{log}'; sleep 30");
@@ -441,7 +486,7 @@ mod tests {
     fn errors_in_log_downgrade_the_verdict() {
         let t = Temp::new("errors");
         let log = t.0.join("game.log");
-        let mut cfg = Config::new(t.0.clone(), log.clone());
+        let mut cfg = Config::new(t.0.join("Config"), t.0.join("run"), log.clone());
         cfg.settle = Duration::from_millis(300);
 
         let cmd = fake_game(
@@ -457,7 +502,7 @@ mod tests {
     fn exit_before_loading_is_a_crash() {
         let t = Temp::new("crash");
         let log = t.0.join("game.log");
-        let mut cfg = Config::new(t.0.clone(), log.clone());
+        let mut cfg = Config::new(t.0.join("Config"), t.0.join("run"), log.clone());
         cfg.settle = Duration::from_millis(300);
 
         let cmd = fake_game(&log, "printf 'Mono path[0] = x\\n' > '{log}'; exit 1");
@@ -474,7 +519,7 @@ mod tests {
         // Первую минуту реального прогона файла лога вообще нет.
         let t = Temp::new("slow");
         let log = t.0.join("game.log");
-        let mut cfg = Config::new(t.0.clone(), log.clone());
+        let mut cfg = Config::new(t.0.join("Config"), t.0.join("run"), log.clone());
         cfg.settle = Duration::from_millis(200);
 
         let cmd = fake_game(&log, "sleep 1; printf 'RimWorld 1.6\\nUnloading 99 unused Assets to reduce memory usage.\\n' > '{log}'; sleep 30");
@@ -489,7 +534,7 @@ mod tests {
     fn timeout_is_reported() {
         let t = Temp::new("timeout");
         let log = t.0.join("game.log");
-        let mut cfg = Config::new(t.0.clone(), log.clone());
+        let mut cfg = Config::new(t.0.join("Config"), t.0.join("run"), log.clone());
         cfg.timeout = Duration::from_millis(400);
 
         let cmd = fake_game(&log, "sleep 30");
@@ -498,50 +543,100 @@ mod tests {
         assert_eq!(drive(&mut run, Duration::from_secs(10)), Verdict::TimedOut);
     }
 
-    #[test]
-    fn config_is_written_and_restored() {
-        let t = Temp::new("config");
-        let path = t.0.join("ModsConfig.xml");
-        std::fs::write(&path, "<?xml version=\"1.0\"?>\n<ModsConfigData>\n\t<version>1.6</version>\n\t<activeMods>\n\t\t<li>original.mod</li>\n\t</activeMods>\n</ModsConfigData>\n").unwrap();
-        let before = std::fs::read_to_string(&path).unwrap();
+    const PLAYER_MODS: &str = "<?xml version=\"1.0\"?>\n<ModsConfigData>\n\t<version>1.6.4633 rev1261</version>\n\t<activeMods>\n\t\t<li>original.mod</li>\n\t</activeMods>\n\t<knownExpansions>\n\t\t<li>ludeon.rimworld.biotech</li>\n\t</knownExpansions>\n</ModsConfigData>\n";
+    const PLAYER_PREFS: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<PrefsData>\n  <runInBackground>False</runInBackground>\n  <automaticPauseMode>MajorThreat</automaticPauseMode>\n  <langFolderName>Russian (Русский)</langFolderName>\n  <devMode>True</devMode>\n</PrefsData>\n";
 
-        let log = t.0.join("game.log");
-        let mut cfg = Config::new(t.0.clone(), log.clone());
-        cfg.settle = Duration::from_millis(200);
-
-        {
-            let cmd = fake_game(&log, "printf 'RimWorld 1.6\\nUnloading 99 unused Assets to reduce memory usage.\\n' > '{log}'; sleep 30");
-            let mut run =
-                TestRun::start(cmd, "fake".into(), cfg, &ids(&["tested.mod"])).unwrap();
-
-            // Во время прогона в конфиге лежит тестируемая сборка.
-            let during = std::fs::read_to_string(&path).unwrap();
-            assert!(during.contains("tested.mod"), "{during}");
-            assert!(!during.contains("original.mod"), "{during}");
-
-            drive(&mut run, Duration::from_secs(10));
-        }
-
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), before, "конфиг не восстановлен");
-        assert!(!t.0.join("ModsConfig.xml.rustrim-backup").exists(), "копия не убрана");
+    /// Config игрока: список модов, Prefs, настройки модов и подпапка мода.
+    fn player_config(t: &Temp) -> PathBuf {
+        let dir = t.0.join("Config");
+        std::fs::create_dir_all(dir.join("RimHUD")).unwrap();
+        std::fs::write(dir.join("ModsConfig.xml"), PLAYER_MODS).unwrap();
+        std::fs::write(dir.join("Prefs.xml"), PLAYER_PREFS).unwrap();
+        std::fs::write(dir.join("Mod_123_SomeMod.xml"), "<SettingsBlock/>").unwrap();
+        std::fs::write(dir.join("RimHUD/Config.xml"), "<Hud/>").unwrap();
+        dir
     }
 
     #[test]
-    fn config_is_restored_even_if_run_is_dropped_early() {
-        let t = Temp::new("drop");
-        let path = t.0.join("ModsConfig.xml");
-        std::fs::write(&path, "<ModsConfigData><activeMods><li>original.mod</li></activeMods></ModsConfigData>").unwrap();
-        let before = std::fs::read_to_string(&path).unwrap();
-
+    fn the_build_goes_into_its_own_folder_and_player_config_is_untouched() {
+        let t = Temp::new("sandbox");
+        let config = player_config(&t);
         let log = t.0.join("game.log");
-        let cfg = Config::new(t.0.clone(), log.clone());
-        {
-            let cmd = fake_game(&log, "sleep 30");
-            let mut run = TestRun::start(cmd, "fake".into(), cfg, &ids(&["tested.mod"])).unwrap();
-            run.cancel();
-        }
+        let mut cfg = Config::new(config.clone(), t.0.join("run"), log.clone());
+        cfg.settle = Duration::from_millis(200);
 
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        let cmd = fake_game(&log, "printf 'RimWorld 1.6\\nUnloading 99 unused Assets to reduce memory usage.\\n' > '{log}'; sleep 30");
+        let mut run = TestRun::start(cmd, "fake".into(), cfg, &ids(&["tested.mod"])).unwrap();
+
+        let tested = std::fs::read_to_string(t.0.join("run/Config/ModsConfig.xml")).unwrap();
+        assert!(tested.contains("tested.mod") && !tested.contains("original.mod"), "{tested}");
+        // Версия и известные DLC — от игрока: иначе игра покажет окно
+        // «найдено новое дополнение» и прогон встанет.
+        assert!(tested.contains("1.6.4633 rev1261") && tested.contains("ludeon.rimworld.biotech"), "{tested}");
+        // Настройки модов — как у игрока.
+        assert!(t.0.join("run/Config/Mod_123_SomeMod.xml").is_file());
+        assert!(t.0.join("run/Config/RimHUD/Config.xml").is_file());
+
+        drive(&mut run, Duration::from_secs(10));
+        // Игрока не тронули ни во время прогона, ни после.
+        assert_eq!(std::fs::read_to_string(config.join("ModsConfig.xml")).unwrap(), PLAYER_MODS);
+        assert_eq!(std::fs::read_to_string(config.join("Prefs.xml")).unwrap(), PLAYER_PREFS);
+        assert!(!config.join("ModsConfig.xml.bak").exists());
+    }
+
+    #[test]
+    fn prefs_that_freeze_or_pause_the_game_are_overridden() {
+        let t = Temp::new("prefs");
+        let config = player_config(&t);
+        prepare_save_data(&config, &t.0.join("run"), &ids(&["a.mod"])).unwrap();
+
+        let prefs = std::fs::read_to_string(t.0.join("run/Config/Prefs.xml")).unwrap();
+        assert!(prefs.contains("<runInBackground>True</runInBackground>"), "{prefs}");
+        assert!(prefs.contains("<automaticPauseMode>Never</automaticPauseMode>"), "{prefs}");
+        // Поля не было — дописано внутрь PrefsData.
+        let at = prefs.find("<pauseOnError>False</pauseOnError>").expect("pauseOnError не дописан");
+        assert!(at < prefs.find("</PrefsData>").unwrap(), "{prefs}");
+        // Остальное — как у игрока: язык влияет на ошибки перевода.
+        assert!(prefs.contains("<langFolderName>Russian (Русский)</langFolderName>"), "{prefs}");
+        assert!(!prefs.contains("False</runInBackground>"), "{prefs}");
+    }
+
+    #[test]
+    fn a_fresh_install_without_prefs_still_gets_the_overrides() {
+        let t = Temp::new("noprefs");
+        prepare_save_data(&t.0.join("Config"), &t.0.join("run"), &ids(&["a.mod"])).unwrap();
+        let prefs = std::fs::read_to_string(t.0.join("run/Config/Prefs.xml")).unwrap();
+        assert!(prefs.contains("<runInBackground>True</runInBackground>"), "{prefs}");
+        assert!(prefs.trim_end().ends_with("</PrefsData>"), "{prefs}");
+    }
+
+    #[test]
+    fn the_previous_run_does_not_leak_into_the_next() {
+        let t = Temp::new("rerun");
+        let config = player_config(&t);
+        let run_dir = t.0.join("run");
+        prepare_save_data(&config, &run_dir, &ids(&["first.mod"])).unwrap();
+        // Мод что-то записал в папку прогона.
+        std::fs::write(run_dir.join("Config/LeftBehind.xml"), "x").unwrap();
+
+        prepare_save_data(&config, &run_dir, &ids(&["second.mod"])).unwrap();
+        assert!(!run_dir.join("Config/LeftBehind.xml").exists());
+        let tested = std::fs::read_to_string(run_dir.join("Config/ModsConfig.xml")).unwrap();
+        assert!(tested.contains("second.mod") && !tested.contains("first.mod"), "{tested}");
+    }
+
+    #[test]
+    fn a_foreign_folder_is_never_wiped() {
+        // Путь собирается из настроек: если он укажет на настоящую папку
+        // данных игры, стирать её нельзя ни при каких условиях.
+        let t = Temp::new("foreign");
+        let config = player_config(&t);
+        let foreign = t.0.join("RealData");
+        std::fs::create_dir_all(foreign.join("Saves")).unwrap();
+        std::fs::write(foreign.join("Saves/colony.rws"), "save").unwrap();
+
+        assert!(prepare_save_data(&config, &foreign, &ids(&["a.mod"])).is_err());
+        assert!(foreign.join("Saves/colony.rws").is_file(), "сохранение стёрто");
     }
 
     #[test]
@@ -567,7 +662,7 @@ mod tests {
         // Тишины не будет никогда, а ответ уже известен.
         let t = Temp::new("storm");
         let log = t.0.join("game.log");
-        let mut cfg = Config::new(t.0.clone(), log.clone());
+        let mut cfg = Config::new(t.0.join("Config"), t.0.join("run"), log.clone());
         cfg.settle = Duration::from_secs(30);
         cfg.settle_cap = Duration::from_secs(30);
 
@@ -589,7 +684,7 @@ mod tests {
         // Без потолка прогон висел бы до самого таймаута.
         let t = Temp::new("chatty");
         let log = t.0.join("game.log");
-        let mut cfg = Config::new(t.0.clone(), log.clone());
+        let mut cfg = Config::new(t.0.join("Config"), t.0.join("run"), log.clone());
         cfg.settle = Duration::from_secs(30);
         cfg.settle_cap = Duration::from_millis(800);
 
@@ -608,7 +703,7 @@ mod tests {
     fn death_during_mod_loading_is_not_a_pass() {
         let t = Temp::new("died");
         let log = t.0.join("game.log");
-        let mut cfg = Config::new(t.0.clone(), log.clone());
+        let mut cfg = Config::new(t.0.join("Config"), t.0.join("run"), log.clone());
         cfg.settle = Duration::from_millis(200);
 
         // Игра объявила версию и умерла, не догрузив моды.

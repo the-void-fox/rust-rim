@@ -176,6 +176,61 @@ fn push_prefix(out: &mut Vec<Prefix>, path: PathBuf, source: &str) {
     }
 }
 
+// ─── Установленные версии Proton ─────────────────────────────────────────────
+
+/// Самая свежая установленная GE-Proton — полный путь к её папке.
+///
+/// Нужна, чтобы прогон не зависел от сети. С `PROTONPATH=GE-Proton` umu на
+/// каждом запуске идёт на GitHub за последней версией: проверено, что это
+/// 11 с из 14 до первой строки лога (а при 504 от GitHub — ещё и ошибка в
+/// выводе), и вдобавок версия Proton может смениться посреди серии
+/// прогонов бисекции.
+pub fn latest_ge_proton() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let data = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".local/share"));
+    // Туда же кладёт загруженные версии сам umu.
+    let dirs = [
+        data.join("Steam/compatibilitytools.d"),
+        home.join(".steam/root/compatibilitytools.d"),
+        home.join(".steam/steam/compatibilitytools.d"),
+        data.join("umu/compatibilitytools"),
+        home.join(".var/app/com.valvesoftware.Steam/data/Steam/compatibilitytools.d"),
+    ];
+    let mut found: Vec<PathBuf> = Vec::new();
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Без скрипта `proton` это недокачанная или битая версия.
+            if path.join("proton").is_file() {
+                found.push(path);
+            }
+        }
+    }
+    newest_ge_proton(found)
+}
+
+/// Выбирает самую свежую GE-Proton по номеру версии из имени папки.
+///
+/// Имена бывают `GE-Proton10-34` и `GE-Proton11-11-x86_64`; сравнивать их
+/// строкой нельзя — «GE-Proton9-27» оказалось бы новее «GE-Proton10-1».
+pub fn newest_ge_proton(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates
+        .into_iter()
+        .filter_map(|path| {
+            let name = path.file_name()?.to_str()?;
+            let rest = name.strip_prefix("GE-Proton")?;
+            let mut nums = rest.split(|c: char| !c.is_ascii_digit()).filter(|s| !s.is_empty());
+            let major: u32 = nums.next()?.parse().ok()?;
+            let minor: u32 = nums.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            Some(((major, minor), path))
+        })
+        .max_by_key(|(version, _)| *version)
+        .map(|(_, path)| path)
+}
+
 fn modified_at(path: &Path) -> std::time::SystemTime {
     std::fs::metadata(path)
         .and_then(|m| m.modified())
@@ -289,6 +344,21 @@ mod tests {
         let t = TempTree::new("bare");
         t.dir("pfx/drive_c/users/steamuser/AppData/LocalLow");
         assert_eq!(data_dir_in_prefix(&t.0.join("pfx")), None);
+    }
+
+    #[test]
+    fn newest_ge_proton_compares_versions_as_numbers() {
+        let p = |s: &str| PathBuf::from(format!("/compat/{s}"));
+        let picked = newest_ge_proton([
+            p("GE-Proton9-27"),
+            p("GE-Proton10-34"),
+            p("GE-Proton11-11-x86_64"),
+            p("GE-Proton11-2"),
+            p("UMU-Proton-12.0-1"),
+            p("Proton-Experimental"),
+        ]);
+        assert_eq!(picked, Some(p("GE-Proton11-11-x86_64")));
+        assert_eq!(newest_ge_proton([p("UMU-Proton-10.0-4")]), None);
     }
 
     #[test]

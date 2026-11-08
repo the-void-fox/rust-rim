@@ -2,7 +2,7 @@
 
 use egui::{Align, Frame, Margin, RichText, ScrollArea, Stroke, Window};
 
-use crate::bisect::{Attempt, Hunt, Kind, Target};
+use crate::bisect::{Attempt, Confirm, Hunt, Kind, Target};
 use crate::mod_data::{ModDb, ModId};
 use crate::testing::Phase;
 use crate::ui::{fit_width, test_panel, theme};
@@ -89,7 +89,7 @@ fn header(ui: &mut egui::Ui, hunt: &Hunt, reply: &mut Reply) {
     ui.horizontal(|ui| {
         let left = hunt.search().result().len();
         ui.label(
-            RichText::new(trf!("Сужено: {started_with} → {left} мод(ов) • прогонов: {runs}", started_with = hunt.started_with(), left, runs = hunt.search().runs()))
+            RichText::new(trf!("Сужено: {started_with} → {left} мод(ов) • прогонов: {runs}", started_with = hunt.started_with(), left, runs = hunt.runs()))
             .color(theme::TEXT_PRIMARY)
             .size(12.0)
             .strong(),
@@ -110,7 +110,7 @@ fn header(ui: &mut egui::Ui, hunt: &Hunt, reply: &mut Reply) {
     ui.add_space(2.0);
     let target = match hunt.target() {
         Target::AnyFailure => tr("Ищем: любой провал прогона").to_string(),
-        Target::Issue(title) => trf!("Ищем: {title}", title),
+        Target::Cause { title, .. } => trf!("Ищем: {title}", title),
     };
     ui.add(
         egui::Label::new(RichText::new(target).color(theme::TEXT_MUTED).size(10.5)).truncate(),
@@ -118,6 +118,14 @@ fn header(ui: &mut egui::Ui, hunt: &Hunt, reply: &mut Reply) {
 }
 
 fn current(ui: &mut egui::Ui, hunt: &Hunt) {
+    if hunt.confirm() == Confirm::Pending {
+        ui.label(
+            RichText::new(tr("Сначала полная сборка прогоняется ещё раз: если проблема плавающая, сужать по ней бессмысленно."))
+                .color(theme::TEXT_MUTED)
+                .size(10.5),
+        );
+        ui.add_space(2.0);
+    }
     match hunt.run() {
         Some(run) => {
             ui.horizontal(|ui| {
@@ -151,6 +159,19 @@ fn current(ui: &mut egui::Ui, hunt: &Hunt) {
 }
 
 fn result(ui: &mut egui::Ui, hunt: &Hunt, db: &ModDb, reply: &mut Reply) {
+    if hunt.not_reproducible() {
+        ui.label(
+            RichText::new(
+                tr("Проблема не повторилась при повторном прогоне полной сборки — она плавающая. \
+                 Сужение по ней дало бы случайный ответ, поэтому поиск не начат. \
+                 Запустите тест ещё раз: если ошибка появится снова, повторите поиск."),
+            )
+            .color(theme::WARNING_AMBER)
+            .size(11.0),
+        );
+        return;
+    }
+
     let found = hunt.search().result();
 
     if hunt.was_cancelled() {
@@ -303,5 +324,6 @@ fn kind_text(kind: Kind) -> &'static str {
         Kind::Part => tr("часть сборки"),
         Kind::Rest => tr("всё, кроме части"),
         Kind::Recheck => tr("проверка без подсказки"),
+        Kind::Confirm => tr("повтор полной сборки"),
     }
 }

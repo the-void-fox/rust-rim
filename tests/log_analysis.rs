@@ -172,3 +172,144 @@ fn attributes_suspects() {
         assert!(e < w || issues[w..].iter().all(|i| i.severity == Severity::Warning));
     }
 }
+
+// ─── Живые форматы Player.log с модом Harmony ────────────────────────────────
+//
+// Фрагменты ниже взяты из прогонов сборки с Performance Optimizer и Camera+,
+// где старый разбор выдавал 118 групп и ни одного подозреваемого.
+
+/// Первый прогон: дубликат стоит раньше оригинала, заголовки с именами пешек.
+const HARMONY_RUN_1: &str = "\
+RimWorld 1.6.4633 rev1261
+Exception ticking Elk20919 (at (168, 0, 56)): System.NullReferenceException: Object reference not set to an instance of an object
+[Ref EC178E71] Duplicate stacktrace, see ref for original
+Exception ticking Singh (at (158, 0, 109)): System.NullReferenceException: Object reference not set to an instance of an object
+[Ref EC178E71]
+  at Verse.Pawn_HealthTracker.HealthTickInterval (System.Int32 delta) <0x6bc75370 + 0x00000> in <46372f5dadbf4af8939e608076251180>:0 
+    - TRANSPILER PerformanceOptimizer.Main: IEnumerable`1 PerformanceOptimizer.Optimization_FasterGetCompReplacement:Transpiler(IEnumerable`1 instructions, MethodBase method)
+  at Verse.Pawn.TickInterval (System.Int32 delta) [0x00073] in <46372f5dadbf4af8939e608076251180>:0 
+  at Verse.Thing.DoTick () [0x000eb] in <46372f5dadbf4af8939e608076251180>:0 
+  at Verse.TickList.Tick () [0x00139] in <46372f5dadbf4af8939e608076251180>:0 
+Exception ticking Josh (at (161, 0, 105)): System.NullReferenceException: Object reference not set to an instance of an object
+[Ref EC178E71] Duplicate stacktrace, see ref for original
+Root level exception in OnGUI(): System.NullReferenceException: Object reference not set to an instance of an object
+[Ref A14251EB]
+  at RimWorld.GlobalControls.GlobalControlsOnGUI () <0x7f6b4ba0 + 0x00000> in <46372f5dadbf4af8939e608076251180>:0 
+    - TRANSPILER PerformanceOptimizer.Main: IEnumerable`1 PerformanceOptimizer.Optimization_FasterGetCompReplacement:Transpiler(IEnumerable`1 instructions, MethodBase method)
+    - PREFIX net.pardeike.rimworld.mod.camera+: Void CameraPlus.GlobalControlsEdgeInsetPatch:Prefix(Matrix4x4& __state)
+    - POSTFIX net.pardeike.rimworld.mod.camera+: Void CameraPlus.GlobalControlsEdgeInsetPatch:Postfix()
+  at RimWorld.MapInterface.MapInterfaceOnGUI_BeforeMainTabs () [0x00109] in <46372f5dadbf4af8939e608076251180>:0 
+  at RimWorld.UIRoot_Play.UIRootOnGUI () [0x0001f] in <46372f5dadbf4af8939e608076251180>:0 
+    - POSTFIX net.pardeike.rimworld.mod.camera+: Void CameraPlus.UIRoot_Play_UIRootOnGUI_Patch:Postfix()
+  at Verse.Root.OnGUI () [0x00046] in <46372f5dadbf4af8939e608076251180>:0 
+    - POSTFIX net.pardeike.rimworld.mod.camera+: Void CameraPlus.Root_OnGUI_Patch:Postfix()
+[[Mac] VRE Highmate Retexture] Patch operation Verse.PatchOperationReplace(/Defs/GeneDef[defName=\"VRE_FelineEars\"]/renderNodeProperties/li/colorType) failed
+file: X:\\Games\\RimWorld (2018)\\RimWorld\\Mods\\3465460387\\Patches\\CatgirlPatches.xml
+Config error in Corpse_Autocleaner: Nutrition == 0 but preferability is DesperateOnly instead of NeverForNutrition
+NullReferenceException: Object reference not set to an instance of an object
+UnityEngine.DebugLogHandler:Internal_LogException(Exception, Object)
+UnityEngine.Debug:LogException(Exception)
+";
+
+/// Второй прогон той же сборки: другой мир, другие пешки, и та же поломка
+/// роняет другой ванильный метод.
+const HARMONY_RUN_2: &str = "\
+RimWorld 1.6.4633 rev1261
+Exception ticking Caribou20936 (at (51, 0, 134)): System.NullReferenceException: Object reference not set to an instance of an object
+[Ref 85DD0702]
+  at RimWorld.InvisibilityUtility.IsHiddenFromPlayer (Verse.Pawn pawn) <0x6aeba570 + 0x00000> in <46372f5dadbf4af8939e608076251180>:0 
+    - TRANSPILER PerformanceOptimizer.Main: IEnumerable`1 PerformanceOptimizer.Optimization_FasterGetCompReplacement:Transpiler(IEnumerable`1 instructions, MethodBase method)
+  at Verse.Pawn.Tick () [0x00285] in <46372f5dadbf4af8939e608076251180>:0 
+  at Verse.Thing.DoTick () [0x0007b] in <46372f5dadbf4af8939e608076251180>:0 
+";
+
+fn harmony_index() -> (Vec<ModEntry>, Profile) {
+    let mods = vec![
+        fake_mod("Performance Optimizer", "taranchuk.performanceoptimizer", "2664723367"),
+        fake_mod("Camera+", "brrainz.cameraplus", "867467808"),
+        fake_mod("[Mac] VRE Highmate Retexture", "mac.vre.highmate", "3465460387"),
+    ];
+    let mut profile = Profile::new();
+    for m in &mods {
+        profile.activate(m.package_id.clone());
+    }
+    (mods, profile)
+}
+
+fn harmony_issues(log: &str) -> Vec<rust_rim::log_analysis::LogIssue> {
+    let (mods, profile) = harmony_index();
+    let parts: Vec<(&ModEntry, Vec<String>)> = vec![
+        (&mods[0], vec!["PerformanceOptimizer".into()]),
+        (&mods[1], vec!["CameraPlus".into()]),
+        (&mods[2], vec![]),
+    ];
+    analyze(log, &ModIndex::build_with_dlls(&parts, &profile))
+}
+
+#[test]
+fn duplicates_of_one_stack_are_one_issue_with_the_original_stack() {
+    let issues = harmony_issues(HARMONY_RUN_1);
+    let ticking: Vec<_> = issues.iter().filter(|i| i.title.starts_with("Exception ticking")).collect();
+    // Три заголовка с разными пешками — один стек, одна запись.
+    assert_eq!(ticking.len(), 1, "{ticking:#?}");
+    assert_eq!(ticking[0].count, 3);
+    // Первым в логе стоял дубликат без стека — стек взят у оригинала.
+    assert_eq!(ticking[0].frames[0].method, "Verse.Pawn_HealthTracker.HealthTickInterval");
+    assert!(ticking[0].frames[0].patched);
+}
+
+#[test]
+fn transpiler_on_the_throwing_frame_names_the_culprit() {
+    let issues = harmony_issues(HARMONY_RUN_1);
+    let ticking = issues.iter().find(|i| i.title.starts_with("Exception ticking")).unwrap();
+    let top = ticking.suspects.first().expect("нет подозреваемых");
+    assert_eq!(top.package_id.as_str(), "taranchuk.performanceoptimizer", "{:?}", ticking.suspects);
+    assert!(top.evidence.iter().any(|e| e.contains("TRANSPILER")), "{:?}", top.evidence);
+
+    // В ошибке интерфейса Camera+ тоже патчит верхний кадр, но транспайлер
+    // весомее, а постфиксы на корнях стека уликой не считаются.
+    let gui = issues.iter().find(|i| i.title.starts_with("Root level exception in OnGUI")).unwrap();
+    assert_eq!(gui.suspects[0].package_id.as_str(), "taranchuk.performanceoptimizer", "{:?}", gui.suspects);
+    assert!(gui.suspects.iter().any(|s| s.package_id.as_str() == "brrainz.cameraplus"));
+}
+
+#[test]
+fn failed_patch_and_config_errors_are_errors() {
+    let issues = harmony_issues(HARMONY_RUN_1);
+    let patch = issues
+        .iter()
+        .find(|i| i.title.contains("Patch operation"))
+        .expect("неудавшийся патч не распознан");
+    assert_eq!(patch.severity, Severity::Error);
+    // Мод назвал себя в скобках, и путь к его папке — в строке file:.
+    assert_eq!(patch.suspects[0].package_id.as_str(), "mac.vre.highmate", "{:?}", patch.suspects);
+    assert!(patch.full_text.contains("file: "), "строка file: потеряна");
+
+    let config = issues.iter().find(|i| i.title.starts_with("Config error")).expect("Config error не распознан");
+    assert_eq!(config.severity, Severity::Error);
+}
+
+#[test]
+fn unity_stack_lines_are_not_separate_errors() {
+    let issues = harmony_issues(HARMONY_RUN_1);
+    assert!(
+        !issues.iter().any(|i| i.title.starts_with("UnityEngine.")),
+        "{:#?}",
+        issues.iter().map(|i| &i.title).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn the_same_breakage_has_the_same_cause_in_another_run() {
+    use rust_rim::bisect::Target;
+    use rust_rim::testing::Verdict;
+
+    let first = harmony_issues(HARMONY_RUN_1);
+    let second = harmony_issues(HARMONY_RUN_2);
+    let target = Target::from_issues(&first);
+    let Target::Cause { key, .. } = &target else { panic!("{target:?}") };
+    assert_eq!(key, "System.NullReferenceException|patched:PerformanceOptimizer.Main");
+    // Ни одного общего заголовка — и всё же это та же ошибка.
+    assert!(!second.iter().any(|b| first.iter().any(|a| a.title == b.title)));
+    assert!(target.matches(&Verdict::LoadedWithErrors, &second));
+}

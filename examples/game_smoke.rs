@@ -48,7 +48,7 @@ fn main() {
     let settings = launch::LaunchSettings::default();
     for (name, mode) in [
         ("обычный", launch::Mode::Play),
-        ("автотест", launch::Mode::QuickTest { log_file: "/tmp/rustrim-quicktest.log".into() }),
+        ("автотест", launch::Mode::QuickTest { log_file: "/tmp/rustrim-quicktest.log".into(), save_data: None }),
     ] {
         match launch::plan(game, &settings, &mode) {
             Ok(plan) => println!("  {name}:\n    {}", plan.display()),
@@ -70,7 +70,7 @@ fn main() {
                 .map(|p| p.data_dir.join("rustrim-quicktest.log"))
                 .expect("не найден префикс для лога");
             println!("Лог автотеста: {}", log.display());
-            launch::Mode::QuickTest { log_file: log }
+            launch::Mode::QuickTest { log_file: log, save_data: None }
         } else {
             launch::Mode::Play
         };

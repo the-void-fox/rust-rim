@@ -66,7 +66,19 @@ pub enum Mode {
     Play,
     /// Прогон для автотеста сборки: игра стартует, генерирует карту
     /// и пишет лог в известное место.
-    QuickTest { log_file: PathBuf },
+    QuickTest {
+        log_file: PathBuf,
+        /// Своя папка данных прогона (`-savedatafolder`): там лежат
+        /// тестируемый ModsConfig.xml и копия настроек игрока. Конфиг игрока
+        /// при этом не трогается вовсе.
+        save_data: Option<PathBuf>,
+    },
+}
+
+impl Mode {
+    fn is_test(&self) -> bool {
+        matches!(self, Mode::QuickTest { .. })
+    }
 }
 
 /// Готовая к исполнению команда.
@@ -107,6 +119,8 @@ pub enum LaunchError {
     NoCustomCommand,
     #[error("через Steam нельзя прогнать автотест: клиент не отдаёт код возврата игры")]
     SteamCannotTest,
+    #[error("в пути {0} есть «=»: RimWorld не разберёт такой -savedatafolder")]
+    BadSaveDataPath(PathBuf),
 }
 
 /// Собирает команду запуска.
@@ -121,6 +135,13 @@ pub fn plan(
 
     if matches!(runner, Runner::Steam) && matches!(mode, Mode::QuickTest { .. }) {
         return Err(LaunchError::SteamCannotTest);
+    }
+
+    if let Mode::QuickTest { save_data: Some(dir), .. } = mode {
+        // RimWorld делит аргумент по «=» и ждёт ровно две части.
+        if dir.to_string_lossy().contains('=') {
+            return Err(LaunchError::BadSaveDataPath(dir.clone()));
+        }
     }
 
     let windows_side = exe.needs_compat_layer() && !matches!(runner, Runner::Native);
@@ -146,12 +167,12 @@ pub fn plan(
                 // umu опознаёт игру по GAMEID и подбирает свои правки.
                 ("GAMEID".to_string(), format!("umu-{APP_ID}")),
             ];
-            let proton = if settings.proton.trim().is_empty() {
-                "GE-Proton".to_string()
-            } else {
-                settings.proton.trim().to_string()
-            };
-            env.push(("PROTONPATH".to_string(), proton));
+            env.push(("PROTONPATH".to_string(), proton_path(settings, mode)));
+            if mode.is_test() {
+                // Без этого umu на каждом старте сверяет рантайм с сервером.
+                // Если рантайма ещё нет, он всё равно установится.
+                env.push(("UMU_RUNTIME_UPDATE".to_string(), "0".to_string()));
+            }
 
             let mut args = vec![exe.path().to_string_lossy().into_owned()];
             args.extend(game_args);
@@ -188,6 +209,23 @@ pub fn plan(
     }
 }
 
+/// Что подставить в PROTONPATH.
+///
+/// «GE-Proton» для umu значит «сходить на GitHub за последней версией». Для
+/// прогона это лишние 11 секунд на каждом запуске и версия Proton, которая
+/// может смениться посреди серии прогонов. Поэтому прогону, если версия не
+/// задана явно, достаётся самая свежая уже установленная GE-Proton.
+fn proton_path(settings: &LaunchSettings, mode: &Mode) -> String {
+    let configured = settings.proton.trim();
+    let wants_latest = configured.is_empty() || configured == "GE-Proton";
+    if wants_latest && mode.is_test() {
+        if let Some(path) = paths::latest_ge_proton() {
+            return path.to_string_lossy().into_owned();
+        }
+    }
+    if configured.is_empty() { "GE-Proton".to_string() } else { configured.to_string() }
+}
+
 /// `Auto` превращается в конкретный способ по тому, что лежит в папке игры.
 fn resolve_runner(requested: Runner, exe: &Executable) -> Runner {
     if requested != Runner::Auto {
@@ -219,14 +257,16 @@ fn game_args(
     prefix: Option<&Path>,
 ) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
-    if let Mode::QuickTest { log_file } = mode {
+    if let Mode::QuickTest { log_file, save_data } = mode {
+        let game_path = |p: &Path| {
+            if windows_side { to_wine_path(p, prefix) } else { p.to_string_lossy().into_owned() }
+        };
         args.push("-quicktest".to_string());
         args.push("-logfile".to_string());
-        args.push(if windows_side {
-            to_wine_path(log_file, prefix)
-        } else {
-            log_file.to_string_lossy().into_owned()
-        });
+        args.push(game_path(log_file));
+        if let Some(dir) = save_data {
+            args.push(format!("-savedatafolder={}", game_path(dir)));
+        }
     }
     args.extend(settings.extra_args.split_whitespace().map(str::to_string));
     args
@@ -351,7 +391,7 @@ mod tests {
     fn quicktest_adds_flags_and_log() {
         let g = Game::native("quicktest");
         let log = PathBuf::from("/tmp/rustrim/test.log");
-        let plan = plan(&g.0, &settings(Runner::Native), &Mode::QuickTest { log_file: log.clone() })
+        let plan = plan(&g.0, &settings(Runner::Native), &Mode::QuickTest { log_file: log.clone(), save_data: None })
             .unwrap();
 
         assert!(plan.args.contains(&"-quicktest".to_string()), "{:?}", plan.args);
@@ -365,7 +405,7 @@ mod tests {
         let g = Game::windows("logpath");
         let mut s = settings(Runner::Wine);
         s.prefix = "/prefixes/rimworld".into();
-        let Ok(plan) = plan(&g.0, &s, &Mode::QuickTest { log_file: "/tmp/x.log".into() }) else {
+        let Ok(plan) = plan(&g.0, &s, &Mode::QuickTest { log_file: "/tmp/x.log".into(), save_data: None }) else {
             return;
         };
         let at = plan.args.iter().position(|a| a == "-logfile").unwrap();
@@ -378,9 +418,73 @@ mod tests {
         let mut s = settings(Runner::Wine);
         s.prefix = "/prefixes/rimworld".into();
         let log = PathBuf::from("/prefixes/rimworld/drive_c/users/x/rustrim.log");
-        let Ok(plan) = plan(&g.0, &s, &Mode::QuickTest { log_file: log }) else { return };
+        let Ok(plan) = plan(&g.0, &s, &Mode::QuickTest { log_file: log, save_data: None }) else { return };
         let at = plan.args.iter().position(|a| a == "-logfile").unwrap();
         assert_eq!(plan.args[at + 1], "C:\\users\\x\\rustrim.log");
+    }
+
+    #[test]
+    fn quicktest_gets_its_own_save_data_folder() {
+        let g = Game::native("savedata");
+        let mode = Mode::QuickTest {
+            log_file: "/data/RustRim/test/quicktest.log".into(),
+            save_data: Some("/data/RustRim/test".into()),
+        };
+        let plan = plan(&g.0, &settings(Runner::Native), &mode).unwrap();
+        // Одним аргументом через «=»: так его ищет GenCommandLine.
+        assert!(plan.args.contains(&"-savedatafolder=/data/RustRim/test".to_string()), "{:?}", plan.args);
+    }
+
+    #[test]
+    fn save_data_inside_the_prefix_uses_drive_c() {
+        let g = Game::windows("savedata_win");
+        let mut s = settings(Runner::Wine);
+        s.prefix = "/prefixes/rimworld".into();
+        let mode = Mode::QuickTest {
+            log_file: "/prefixes/rimworld/drive_c/users/x/RustRim/test/quicktest.log".into(),
+            save_data: Some("/prefixes/rimworld/drive_c/users/x/RustRim/test".into()),
+        };
+        let Ok(plan) = plan(&g.0, &s, &mode) else { return };
+        assert!(
+            plan.args.contains(&"-savedatafolder=C:\\users\\x\\RustRim\\test".to_string()),
+            "{:?}",
+            plan.args,
+        );
+    }
+
+    #[test]
+    fn save_data_path_with_equals_sign_is_rejected() {
+        let g = Game::native("savedata_eq");
+        let mode = Mode::QuickTest { log_file: "/tmp/x.log".into(), save_data: Some("/a=b/test".into()) };
+        let err = plan(&g.0, &settings(Runner::Native), &mode);
+        assert!(matches!(err, Err(LaunchError::BadSaveDataPath(_))), "{err:?}");
+    }
+
+    #[test]
+    fn test_runs_do_not_go_online_for_proton() {
+        let g = Game::windows("offline");
+        let mode = Mode::QuickTest { log_file: "/tmp/x.log".into(), save_data: None };
+        let Ok(test) = plan(&g.0, &settings(Runner::Umu), &mode) else { return };
+        assert_eq!(env_of(&test, "UMU_RUNTIME_UPDATE").as_deref(), Some("0"));
+        // Установленная версия — полным путём; «GE-Proton» остаётся, только
+        // если ставить нечего и umu всё равно придётся скачать её самому.
+        let proton = env_of(&test, "PROTONPATH").unwrap();
+        assert!(proton == "GE-Proton" || proton.starts_with('/'), "{proton}");
+
+        // Обычный запуск остаётся как был.
+        let play = plan(&g.0, &settings(Runner::Umu), &Mode::Play).unwrap();
+        assert_eq!(env_of(&play, "UMU_RUNTIME_UPDATE"), None);
+        assert_eq!(env_of(&play, "PROTONPATH").as_deref(), Some("GE-Proton"));
+    }
+
+    #[test]
+    fn explicit_proton_is_kept_for_test_runs_too() {
+        let g = Game::windows("explicit_test");
+        let mut s = settings(Runner::Umu);
+        s.proton = "/opt/GE-Proton10-34".to_string();
+        let mode = Mode::QuickTest { log_file: "/tmp/x.log".into(), save_data: None };
+        let Ok(plan) = plan(&g.0, &s, &mode) else { return };
+        assert_eq!(env_of(&plan, "PROTONPATH").as_deref(), Some("/opt/GE-Proton10-34"));
     }
 
     #[test]
@@ -419,7 +523,7 @@ mod tests {
         let err = plan(
             &g.0,
             &settings(Runner::Steam),
-            &Mode::QuickTest { log_file: "/tmp/x.log".into() },
+            &Mode::QuickTest { log_file: "/tmp/x.log".into(), save_data: None },
         );
         assert!(matches!(err, Err(LaunchError::SteamCannotTest)), "{err:?}");
     }

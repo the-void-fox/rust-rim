@@ -148,19 +148,25 @@ impl GameSession {
 
         let game = std::path::Path::new(&settings.game_path);
         let config_dir = std::path::PathBuf::from(&settings.config_path);
-        // Лог кладём рядом с Player.log: под umu игра работает в контейнере
-        // со своим /tmp, и файл на произвольном пути хосту не виден.
-        let log_file = config_dir
+        // Своя папка данных прогона — рядом с Player.log, в папке данных
+        // игры: под umu игра работает в контейнере со своим /tmp, и папку
+        // на произвольном пути хост не увидит. Лог — туда же.
+        let save_data = config_dir
             .parent()
             .unwrap_or(&config_dir)
-            .join("rustrim-quicktest.log");
+            .join("RustRim")
+            .join("test");
+        let log_file = save_data.join("quicktest.log");
 
         let mut launch_settings = settings.launch.clone();
         launch_settings.prefix = prefix.to_string_lossy().into_owned();
-        let mode = launch::Mode::QuickTest { log_file: log_file.clone() };
+        let mode = launch::Mode::QuickTest {
+            log_file: log_file.clone(),
+            save_data: Some(save_data.clone()),
+        };
         let plan = launch::plan(game, &launch_settings, &mode).map_err(|e| e.to_string())?;
 
-        let mut config = testing::Config::new(config_dir, log_file);
+        let mut config = testing::Config::new(config_dir, save_data, log_file);
         if let Some(exe) = paths::find_executable(game) {
             config.cleanup = Some((prefix, exe.path().to_path_buf()));
         }
