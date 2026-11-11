@@ -250,12 +250,16 @@ mod tests {
 
     #[test]
     fn own_process_ticks_are_readable() {
-        // Хоть сколько-то CPU тест-процесс уже потратил.
+        // Жжём CPU, пока ядро не засчитает хотя бы один тик (обычно 10 мс).
+        // Фиксированный цикл не годится: в release (так тесты гоняет nix)
+        // оптимизатор считал его на этапе компиляции, и тик мог не набежать.
         if cfg!(target_os = "linux") {
-            let mut x = 0u64;
-            for i in 0..5_000_000u64 { x = x.wrapping_add(i * i); }
-            assert!(x > 0);
-            assert!(process_ticks(std::process::id() as i32) > 0);
+            let pid = std::process::id() as i32;
+            let start = std::time::Instant::now();
+            while process_ticks(pid) == 0 && start.elapsed() < std::time::Duration::from_secs(2) {
+                std::hint::black_box((0..100_000u64).fold(0u64, |a, i| a.wrapping_add(std::hint::black_box(i) * i)));
+            }
+            assert!(process_ticks(pid) > 0);
         }
     }
 
