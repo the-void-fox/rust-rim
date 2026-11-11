@@ -41,7 +41,9 @@
 
           # Добавляем copyDesktopItems для автоматической установки ярлыка
           nativeBuildInputs = with pkgs; [ pkg-config makeWrapper copyDesktopItems ];
-          buildInputs = runtimeLibs pkgs ++ [ pkgs.gtk3 pkgs.glib ];
+          # zstd — для zstd-sys: с ноября 2026 nixpkgs не даёт ему собирать
+          # свою копию (ZSTD_SYS_USE_PKG_CONFIG=1), нужна системная libzstd.
+          buildInputs = runtimeLibs pkgs ++ [ pkgs.gtk3 pkgs.glib pkgs.zstd ];
 
           # Генерация .desktop файла
           desktopItems = [
