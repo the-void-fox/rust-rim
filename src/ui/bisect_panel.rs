@@ -24,7 +24,14 @@ pub enum Reply {
     Deactivate(Vec<ModId>),
 }
 
-pub fn show(ctx: &egui::Context, state: &mut BisectUi, hunt: Option<&Hunt>, db: &ModDb) -> Reply {
+/// `preparing` — идёт копирование префикса для второго рабочего места.
+pub fn show(
+    ctx: &egui::Context,
+    state: &mut BisectUi,
+    hunt: Option<&Hunt>,
+    db: &ModDb,
+    preparing: bool,
+) -> Reply {
     if !state.open {
         return Reply::None;
     }
@@ -43,7 +50,7 @@ pub fn show(ctx: &egui::Context, state: &mut BisectUi, hunt: Option<&Hunt>, db: 
                 .stroke(Stroke::new(1.0, theme::BORDER_ACCENT)),
         )
         .show(ctx, |ui| match hunt {
-            Some(hunt) => body(ui, hunt, db, &mut reply),
+            Some(hunt) => body(ui, hunt, db, preparing, &mut reply),
             None => intro(ui),
         });
 
@@ -67,7 +74,7 @@ fn intro(ui: &mut egui::Ui) {
     );
 }
 
-fn body(ui: &mut egui::Ui, hunt: &Hunt, db: &ModDb, reply: &mut Reply) {
+fn body(ui: &mut egui::Ui, hunt: &Hunt, db: &ModDb, preparing: bool, reply: &mut Reply) {
     header(ui, hunt, reply);
     ui.add_space(4.0);
     ui.separator();
@@ -76,7 +83,7 @@ fn body(ui: &mut egui::Ui, hunt: &Hunt, db: &ModDb, reply: &mut Reply) {
     if hunt.is_done() {
         result(ui, hunt, db, reply);
     } else {
-        current(ui, hunt);
+        current(ui, hunt, preparing);
     }
 
     if !hunt.attempts().is_empty() {
@@ -89,7 +96,7 @@ fn header(ui: &mut egui::Ui, hunt: &Hunt, reply: &mut Reply) {
     ui.horizontal(|ui| {
         let left = hunt.search().result().len();
         ui.label(
-            RichText::new(trf!("Сужено: {started_with} → {left} мод(ов) • прогонов: {runs}", started_with = hunt.started_with(), left, runs = hunt.runs()))
+            RichText::new(trf!("Сужено: {started_with} → {left} мод(ов) • прогонов: {runs}", started_with = hunt.started_with(), left, runs = hunt.run_count()))
             .color(theme::TEXT_PRIMARY)
             .size(12.0)
             .strong(),
@@ -110,6 +117,7 @@ fn header(ui: &mut egui::Ui, hunt: &Hunt, reply: &mut Reply) {
     ui.add_space(2.0);
     let target = match hunt.target() {
         Target::AnyFailure => tr("Ищем: любой провал прогона").to_string(),
+        Target::Crash => tr("Ищем: краш игры").to_string(),
         Target::Cause { title, .. } => trf!("Ищем: {title}", title),
     };
     ui.add(
@@ -117,7 +125,7 @@ fn header(ui: &mut egui::Ui, hunt: &Hunt, reply: &mut Reply) {
     );
 }
 
-fn current(ui: &mut egui::Ui, hunt: &Hunt) {
+fn current(ui: &mut egui::Ui, hunt: &Hunt, preparing: bool) {
     if hunt.confirm() == Confirm::Pending {
         ui.label(
             RichText::new(tr("Сначала полная сборка прогоняется ещё раз: если проблема плавающая, сужать по ней бессмысленно."))
@@ -126,35 +134,45 @@ fn current(ui: &mut egui::Ui, hunt: &Hunt) {
         );
         ui.add_space(2.0);
     }
-    match hunt.run() {
-        Some(run) => {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(
-                    RichText::new(trf!("{status} • сборка из {count} мод(ов) • {secs} с", status = test_panel::phase_text(run.phase()), count = run.active().len(), secs = run.elapsed().as_secs()))
-                    .color(theme::TEXT_PRIMARY)
+    if preparing {
+        ui.label(
+            RichText::new(tr("Готовим копию префикса для второго прогона — пока поиск идёт в одном."))
+                .color(theme::TEXT_MUTED)
+                .size(10.5),
+        );
+        ui.add_space(2.0);
+    }
+
+    let mut any = false;
+    for (kind, run) in hunt.active_runs() {
+        any = true;
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(
+                RichText::new(trf!("{status} • сборка из {count} мод(ов) • {secs} с", status = test_panel::phase_text(run.phase()), count = run.active().len(), secs = run.elapsed().as_secs()))
+                .color(theme::TEXT_PRIMARY)
+                .size(11.5),
+            );
+            ui.label(RichText::new(kind_text(kind)).color(theme::TEXT_MUTED).size(10.5));
+        });
+        if matches!(run.phase(), Phase::Starting) {
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new(tr("Первую минуту лога нет — Proton поднимает окружение."))
+                    .color(theme::TEXT_MUTED)
+                    .size(10.5),
+            );
+        }
+    }
+    if !any {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(
+                RichText::new(tr("Готовим следующий прогон…"))
+                    .color(theme::TEXT_MUTED)
                     .size(11.5),
-                );
-            });
-            if matches!(run.phase(), Phase::Starting) {
-                ui.add_space(2.0);
-                ui.label(
-                    RichText::new(tr("Первую минуту лога нет — Proton поднимает окружение."))
-                        .color(theme::TEXT_MUTED)
-                        .size(10.5),
-                );
-            }
-        }
-        None => {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(
-                    RichText::new(tr("Готовим следующий прогон…"))
-                        .color(theme::TEXT_MUTED)
-                        .size(11.5),
-                );
-            });
-        }
+            );
+        });
     }
 }
 

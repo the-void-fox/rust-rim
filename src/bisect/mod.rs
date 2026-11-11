@@ -13,5 +13,5 @@
 pub mod driver;
 pub mod search;
 
-pub use driver::{Attempt, Confirm, Hunt};
+pub use driver::{Attempt, Confirm, Hunt, Request};
 pub use search::{Candidate, Deps, Kind, Search, Step, Target};

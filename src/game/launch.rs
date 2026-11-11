@@ -45,7 +45,7 @@ impl Runner {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LaunchSettings {
     pub runner: Runner,
@@ -57,6 +57,35 @@ pub struct LaunchSettings {
     pub custom_command: String,
     /// Дополнительные аргументы игры, через пробел.
     pub extra_args: String,
+    /// Прогоны автотеста и поиска — без окна на экране, через cage.
+    pub background_tests: bool,
+    /// Сколько прогонов поиска виновника держать одновременно.
+    pub parallel_runs: u8,
+}
+
+impl Default for LaunchSettings {
+    fn default() -> Self {
+        Self {
+            runner: Runner::default(),
+            prefix: String::new(),
+            proton: String::new(),
+            custom_command: String::new(),
+            extra_args: String::new(),
+            background_tests: true,
+            parallel_runs: 2,
+        }
+    }
+}
+
+/// Больше трёх экземпляров игры одновременно не потянет память обычной
+/// машины: каждый — от 2 ГБ на маленькой сборке.
+pub const MAX_PARALLEL_RUNS: u8 = 3;
+
+impl LaunchSettings {
+    /// Сколько прогонов поиска держать одновременно, в разумных пределах.
+    pub fn parallel(&self) -> usize {
+        self.parallel_runs.clamp(1, MAX_PARALLEL_RUNS) as usize
+    }
 }
 
 /// Зачем запускаем.
@@ -151,7 +180,7 @@ pub fn plan(
     let game_args = game_args(settings, mode, windows_side, prefix.as_deref());
     let cwd = game_path.to_path_buf();
 
-    match runner {
+    let plan = match runner {
         Runner::Native | Runner::Auto => Ok(Plan {
             program: exe.path().to_string_lossy().into_owned(),
             args: game_args,
@@ -206,7 +235,46 @@ pub fn plan(
             args.extend(game_args);
             Ok(Plan { program, args, env: Vec::new(), cwd })
         }
+    }?;
+
+    if mode.is_test() && settings.background_tests && runner == Runner::Umu && has_program("cage") {
+        return Ok(in_background(plan));
     }
+    Ok(plan)
+}
+
+/// Есть ли cage — без него прогоны идут с обычным окном.
+pub fn background_available() -> bool {
+    has_program("cage")
+}
+
+/// Заворачивает команду в cage с headless-выводом: игра рисует на настоящей
+/// видеокарте, но в невидимый экран, и окна на рабочем столе нет.
+///
+/// Так, а не флагами Unity: `-batchmode` и `-nographics` ломают шейдеры и
+/// дают ложные NullReferenceException. И не скрытым окном: невидимому окну
+/// Xwayland не отдаёт кадры, игра встаёт, и тишина в логе засчитывается как
+/// успех. Проверено на живых прогонах: внутри cage — те же 60 тиков в секунду,
+/// что у видимого окна, и те же ошибки.
+fn in_background(plan: Plan) -> Plan {
+    let mut args = vec!["--".to_string(), plan.program];
+    args.extend(plan.args);
+    let mut env = plan.env;
+    for (k, v) in [
+        ("WLR_BACKENDS", "headless"),
+        ("WLR_LIBINPUT_NO_DEVICES", "1"),
+        ("WLR_RENDERER", "gles2"),
+        // Wayland-драйвер Wine: через Xwayland кадры отдаются медленнее,
+        // и игра шла 25 тиков в секунду вместо 60.
+        ("PROTON_ENABLE_WAYLAND", "1"),
+        // Не ждать вертикальной синхронизации от невидимого экрана,
+        // но и не жечь видеокарту сотнями кадров.
+        ("DXVK_CONFIG", "dxgi.syncInterval = 0"),
+        ("DXVK_FRAME_RATE", "60"),
+    ] {
+        env.push((k.to_string(), v.to_string()));
+    }
+    Plan { program: "cage".to_string(), args, env, cwd: plan.cwd }
 }
 
 /// Что подставить в PROTONPATH.
@@ -296,13 +364,14 @@ pub fn to_wine_path(path: &Path, prefix: Option<&Path>) -> String {
 }
 
 /// Есть ли программа в PATH.
+fn has_program(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(name).is_file()))
+        .unwrap_or(false)
+}
+
 fn require_program(name: &str) -> Result<(), LaunchError> {
-    let found = std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths).any(|dir| dir.join(name).is_file())
-        })
-        .unwrap_or(false);
-    if found {
+    if has_program(name) {
         Ok(())
     } else {
         Err(LaunchError::MissingProgram(name.to_string()))
@@ -475,6 +544,32 @@ mod tests {
         let play = plan(&g.0, &settings(Runner::Umu), &Mode::Play).unwrap();
         assert_eq!(env_of(&play, "UMU_RUNTIME_UPDATE"), None);
         assert_eq!(env_of(&play, "PROTONPATH").as_deref(), Some("GE-Proton"));
+    }
+
+    #[test]
+    fn background_tests_are_wrapped_in_cage() {
+        let g = Game::windows("cage");
+        let mode = Mode::QuickTest { log_file: "/tmp/x.log".into(), save_data: None };
+        let Ok(plan) = plan(&g.0, &settings(Runner::Umu), &mode) else { return };
+        if !background_available() {
+            // Без cage — обычный запуск с окном, а не ошибка.
+            assert_eq!(plan.program, "umu-run");
+            return;
+        }
+        assert_eq!(plan.program, "cage");
+        assert_eq!(plan.args[..2], ["--".to_string(), "umu-run".to_string()]);
+        assert_eq!(env_of(&plan, "WLR_BACKENDS").as_deref(), Some("headless"));
+        assert_eq!(env_of(&plan, "PROTON_ENABLE_WAYLAND").as_deref(), Some("1"));
+        // Префикс и Proton на месте.
+        assert!(env_of(&plan, "WINEPREFIX").is_some());
+
+        // Обычный запуск игры — всегда с окном.
+        let play = super::plan(&g.0, &settings(Runner::Umu), &Mode::Play).unwrap();
+        assert_eq!(play.program, "umu-run");
+        // И выключенная настройка — тоже.
+        let mut s = settings(Runner::Umu);
+        s.background_tests = false;
+        assert_eq!(super::plan(&g.0, &s, &mode).unwrap().program, "umu-run");
     }
 
     #[test]

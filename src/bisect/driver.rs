@@ -1,14 +1,26 @@
 //! Гоняет игру по наборам, которые выдаёт [`super::search`].
 //!
 //! Сам процессы не запускает: собрать команду умеет только приложение, где
-//! лежат настройки и пути. Драйвер говорит, какой набор нужен, получает
-//! готовый прогон и превращает его результат в ответ «воспроизвелось / нет».
+//! лежат настройки и пути. Драйвер говорит, какой набор нужен и в каком
+//! рабочем месте, получает готовый прогон и превращает его результат в ответ
+//! «воспроизвелось / нет».
+//!
+//! Рабочих мест может быть несколько — тогда наборы гоняются параллельно:
+//! пока идёт тот, что нужен поиску прямо сейчас, рядом идёт следующий по
+//! плану (см. [`Search::plan`]). Проверено на живой сборке: два экземпляра
+//! игры укладываются в 74 с против 136 подряд.
 
-use crate::log_analysis::LogIssue;
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
+
+use crate::log_analysis::{parse_log, LogIssue};
 use crate::mod_data::{ModDb, ModId, Profile};
 use crate::testing::{Phase, TestRun, Verdict};
 
 use super::search::{Kind, Search, Target};
+
+/// Как часто заглядывать в лог идущего прогона за искомой ошибкой.
+const PEEK_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Чем закончился очередной прогон.
 #[derive(Clone, Debug)]
@@ -39,6 +51,23 @@ pub enum Confirm {
     Skipped,
 }
 
+/// Набор, который надо прогнать в рабочем месте `worker`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Request {
+    pub worker: usize,
+    pub active: Vec<ModId>,
+}
+
+/// Прогон, занимающий рабочее место.
+struct Slot {
+    worker: usize,
+    kind: Kind,
+    active: Vec<ModId>,
+    run: TestRun,
+    /// Когда последний раз смотрели в лог за искомой ошибкой.
+    peeked: Option<Instant>,
+}
+
 /// Идущий поиск виновника.
 pub struct Hunt {
     search: Search,
@@ -46,7 +75,12 @@ pub struct Hunt {
     /// Полная сборка — для проверочного повтора.
     full: Vec<ModId>,
     confirm: Confirm,
-    run: Option<TestRun>,
+    slots: Vec<Slot>,
+    /// Сколько прогонов можно держать одновременно.
+    workers: usize,
+    /// Выданный, но ещё не запущенный набор: до [`Hunt::attach`] отдаётся
+    /// снова, чтобы очередь не съезжала, если игру запустить не удалось.
+    requested: Option<(Request, Kind)>,
     /// Сколько модов было в исходной сборке — для показа сужения.
     started_with: usize,
     /// Прогоны, которые провалились не по той причине, что мы ищем.
@@ -56,8 +90,6 @@ pub struct Hunt {
     /// что мы у неё что-то отняли. Поэтому число показывается пользователю.
     off_target: usize,
     attempts: Vec<Attempt>,
-    /// Откуда взялся набор, который сейчас прогоняется.
-    pending_kind: Option<Kind>,
     cancelled: bool,
 }
 
@@ -70,10 +102,11 @@ impl Hunt {
             confirm,
             search,
             target,
-            run: None,
+            slots: Vec::new(),
+            workers: 1,
+            requested: None,
             off_target: 0,
             attempts: Vec::new(),
-            pending_kind: None,
             cancelled: false,
         }
     }
@@ -85,9 +118,20 @@ impl Hunt {
     /// Берутся подозреваемые только искомой проблемы и только с весомыми
     /// уликами: подсказка из всех ошибок лога разрослась бы до половины
     /// сборки и перестала бы экономить прогоны.
-    pub fn from_failed_run(db: &ModDb, profile: &Profile, issues: &[LogIssue]) -> Self {
-        let target = Target::from_issues(issues);
+    pub fn from_failed_run(
+        db: &ModDb,
+        profile: &Profile,
+        verdict: &Verdict,
+        issues: &[LogIssue],
+    ) -> Self {
+        let target = Target::from_run(verdict, issues);
         Self::new(Search::from_profile(db, profile, hint_for(&target, issues)), target)
+    }
+
+    /// Сколько прогонов держать одновременно. Меняется на ходу: второе
+    /// рабочее место появляется, когда для него готов свой префикс.
+    pub fn set_workers(&mut self, workers: usize) {
+        self.workers = workers.max(1);
     }
 
     pub fn target(&self) -> &Target {
@@ -98,8 +142,9 @@ impl Hunt {
         &self.search
     }
 
-    pub fn run(&self) -> Option<&TestRun> {
-        self.run.as_ref()
+    /// Идущие прогоны: откуда набор и сам прогон.
+    pub fn active_runs(&self) -> impl Iterator<Item = (Kind, &TestRun)> {
+        self.slots.iter().map(|s| (s.kind, &s.run))
     }
 
     pub fn attempts(&self) -> &[Attempt] {
@@ -124,83 +169,162 @@ impl Hunt {
     }
 
     /// Сколько прогонов уже сделано, включая проверочный.
-    pub fn runs(&self) -> usize {
+    pub fn run_count(&self) -> usize {
         self.attempts.len()
     }
 
     pub fn is_done(&self) -> bool {
         self.cancelled
             || self.not_reproducible()
-            || (self.run.is_none() && self.confirm != Confirm::Pending && self.search.is_done())
+            || (self.slots.is_empty()
+                && self.requested.is_none()
+                && self.confirm != Confirm::Pending
+                && self.search.is_done())
     }
 
     pub fn was_cancelled(&self) -> bool {
         self.cancelled
     }
 
-    /// Набор, который надо прогнать прямо сейчас, если прогона ещё нет.
+    /// Следующий набор для свободного рабочего места, если есть что гонять.
     ///
     /// Повторный вызов до [`Hunt::attach`] отдаёт тот же набор: если запустить
     /// игру не удалось, очередь не должна съезжать.
-    pub fn wants_run(&mut self) -> Option<Vec<ModId>> {
-        if self.cancelled || self.run.is_some() || self.not_reproducible() {
+    pub fn wants_run(&mut self) -> Option<Request> {
+        if self.cancelled || self.not_reproducible() {
             return None;
         }
-        if self.confirm == Confirm::Pending {
-            self.pending_kind = Some(Kind::Confirm);
-            return Some(self.full.clone());
+        if let Some((request, _)) = &self.requested {
+            return Some(request.clone());
         }
-        self.search.next().map(|c| {
-            self.pending_kind = Some(c.kind);
-            c.active
-        })
+        let worker = (0..self.workers).find(|w| !self.slots.iter().any(|s| s.worker == *w))?;
+        let (kind, active) = self
+            .wanted()
+            .into_iter()
+            .find(|(_, set)| !self.slots.iter().any(|s| same_set(&s.active, set)))?;
+        let request = Request { worker, active };
+        self.requested = Some((request.clone(), kind));
+        Some(request)
     }
 
     /// Отдаёт запущенный прогон под управление.
     pub fn attach(&mut self, run: TestRun) {
-        self.run = Some(run);
+        let Some((request, kind)) = self.requested.take() else { return };
+        self.slots.push(Slot {
+            worker: request.worker,
+            kind,
+            active: request.active,
+            run,
+            peeked: None,
+        });
     }
 
-    /// Двигает состояние. Возвращает `true`, если прогон только что закончился.
-    pub fn poll(&mut self, db: &ModDb, profile: &Profile) -> bool {
-        let Some(run) = &mut self.run else { return false };
-        let Phase::Done(verdict) = run.poll().clone() else {
-            return false;
-        };
-
-        // Остановку прогона пользователем нельзя считать ответом: мы не
-        // знаем, воспроизвелось бы или нет.
-        if verdict == Verdict::Cancelled {
-            self.cancel();
-            return true;
+    /// Двигает состояние. Возвращает `true`, если какой-то прогон только что
+    /// закончился.
+    pub fn poll(&mut self) -> bool {
+        let target = &self.target;
+        for slot in &mut self.slots {
+            if matches!(slot.run.poll(), Phase::Done(_)) {
+                continue;
+            }
+            // Искомая ошибка уже в логе — ответ есть, доигрывать незачем.
+            if slot.peeked.is_none_or(|t| t.elapsed() >= PEEK_INTERVAL) {
+                slot.peeked = Some(Instant::now());
+                if target.found_in(&parse_log(&slot.run.log_text())) {
+                    slot.run.conclude(Verdict::StoppedOnTarget);
+                }
+            }
         }
 
-        let issues = run.issues(db, profile);
-        let size = run.active().len();
-        let reproduced = self.target.matches(&verdict, &issues);
-        let kind = self.pending_kind.take().unwrap_or(Kind::Part);
-        self.attempts.push(Attempt { kind, verdict: verdict.clone(), size, reproduced });
-        self.run = None;
-
-        if kind == Kind::Confirm {
-            self.confirm = if reproduced { Confirm::Reproduced } else { Confirm::NotReproduced };
-            return true;
+        let mut finished = false;
+        let mut i = 0;
+        while i < self.slots.len() {
+            let Phase::Done(verdict) = self.slots[i].run.phase().clone() else {
+                i += 1;
+                continue;
+            };
+            let slot = self.slots.remove(i);
+            finished = true;
+            // Остановку прогона пользователем нельзя считать ответом: мы не
+            // знаем, воспроизвелось бы или нет.
+            if verdict == Verdict::Cancelled {
+                self.cancel();
+                return true;
+            }
+            self.finish(slot, verdict);
         }
-        if !reproduced && !matches!(verdict, Verdict::Passed) {
-            self.off_target += 1;
+        if finished {
+            self.prune();
         }
-        self.search.record(reproduced);
-        true
+        finished
     }
 
     /// Останавливает поиск, оставляя найденное приближение.
     pub fn cancel(&mut self) {
-        if let Some(run) = &mut self.run {
-            run.cancel();
+        for slot in &mut self.slots {
+            slot.run.cancel();
         }
-        self.run = None;
+        self.slots.clear();
+        self.requested = None;
         self.search.stop();
         self.cancelled = true;
+    }
+
+    /// Наборы, которые нужны прямо сейчас, по порядку важности.
+    fn wanted(&mut self) -> Vec<(Kind, Vec<ModId>)> {
+        let mut out = Vec::new();
+        if self.confirm == Confirm::Pending {
+            out.push((Kind::Confirm, self.full.clone()));
+        }
+        if self.confirm != Confirm::NotReproduced {
+            // Выдать набор поиску: ответ на него двигает поиск, а не кеш.
+            self.search.next();
+            out.extend(self.search.plan(self.workers).into_iter().map(|c| (c.kind, c.active)));
+        }
+        out.truncate(self.workers);
+        out
+    }
+
+    fn finish(&mut self, slot: Slot, verdict: Verdict) {
+        // Причине не нужны подозреваемые: хватает разбора без индекса модов.
+        let issues = parse_log(&slot.run.log_text());
+        let reproduced = self.target.matches(&verdict, &issues);
+        self.attempts.push(Attempt {
+            kind: slot.kind,
+            verdict: verdict.clone(),
+            size: slot.active.len(),
+            reproduced,
+        });
+
+        if slot.kind == Kind::Confirm {
+            self.confirm = if reproduced { Confirm::Reproduced } else { Confirm::NotReproduced };
+            return;
+        }
+        if !reproduced && !matches!(verdict, Verdict::Passed) {
+            self.off_target += 1;
+        }
+        self.search.remember(&slot.active, reproduced);
+    }
+
+    /// Снимает прогоны, которые после нового ответа стали не нужны: поиск
+    /// свернул в другую сторону, или искать больше нечего.
+    fn prune(&mut self) {
+        let wanted = if self.not_reproducible() { Vec::new() } else { self.wanted() };
+        self.slots.retain_mut(|slot| {
+            let keep = wanted.iter().any(|(_, set)| same_set(set, &slot.active));
+            if !keep {
+                slot.run.cancel();
+            }
+            keep
+        });
+    }
+}
+
+/// Один и тот же ли состав, независимо от порядка.
+fn same_set(a: &[ModId], b: &[ModId]) -> bool {
+    a.len() == b.len() && {
+        let left: HashSet<&ModId> = a.iter().collect();
+        b.iter().all(|id| left.contains(id))
     }
 }
 
@@ -229,6 +353,7 @@ fn hint_for(target: &Target, issues: &[LogIssue]) -> Vec<ModId> {
 mod tests {
     use super::*;
     use crate::bisect::search::Deps;
+    use crate::testing::Config;
 
     fn ids(list: &[&str]) -> Vec<ModId> {
         list.iter().map(|s| ModId::new(s)).collect()
@@ -241,12 +366,23 @@ mod tests {
         )
     }
 
+    /// Прогон-заглушка: процесс, который ничего не пишет.
+    fn idle_run(tag: &str, active: &[ModId]) -> (TestRun, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("rustrim_driver_{}_{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = Config::new(dir.join("Config"), dir.join("run"), dir.join("game.log"));
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c").arg("sleep 30");
+        (TestRun::start(cmd, "fake".into(), cfg, active).unwrap(), dir)
+    }
+
     #[test]
     fn the_same_set_is_offered_until_a_run_is_attached() {
         // Если игру запустить не удалось, очередь съезжать не должна.
         let mut h = hunt(&["a", "b", "c", "d"]);
         let first = h.wants_run().expect("есть что проверять");
-        assert_eq!(h.wants_run().as_deref(), Some(first.as_slice()));
+        assert_eq!(h.wants_run(), Some(first));
     }
 
     #[test]
@@ -264,8 +400,31 @@ mod tests {
         let mut h = hunt(&["a", "b", "c", "d"]);
         assert_eq!(h.confirm(), Confirm::Pending);
         let first = h.wants_run().expect("есть что проверять");
-        assert_eq!(first, ids(&["a", "b", "c", "d"]), "сначала — полная сборка");
+        assert_eq!(first.active, ids(&["a", "b", "c", "d"]), "сначала — полная сборка");
+        assert_eq!(first.worker, 0);
         assert!(!h.is_done());
+    }
+
+    #[test]
+    fn a_second_worker_runs_the_next_set_alongside() {
+        let mut h = hunt(&["a", "b", "c", "d"]);
+        h.set_workers(2);
+
+        let first = h.wants_run().unwrap();
+        let (run, dir1) = idle_run("w0", &first.active);
+        h.attach(run);
+
+        let second = h.wants_run().expect("второе место свободно");
+        assert_eq!(second.worker, 1);
+        assert_ne!(second.active, first.active, "параллельно — другой набор");
+        let (run, dir2) = idle_run("w1", &second.active);
+        h.attach(run);
+
+        assert!(h.wants_run().is_none(), "оба места заняты");
+        assert_eq!(h.active_runs().count(), 2);
+        h.cancel();
+        let _ = std::fs::remove_dir_all(dir1);
+        let _ = std::fs::remove_dir_all(dir2);
     }
 
     #[test]

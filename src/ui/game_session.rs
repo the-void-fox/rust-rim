@@ -8,8 +8,13 @@
 
 use egui::Context;
 
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::bisect::Hunt;
-use crate::game::{launch, paths, Prefix};
+use crate::game::teardown::Owner;
+use crate::game::{launch, paths, workers, Prefix};
+use crate::job::Job;
 use crate::mod_data::{ModDb, ModId, Profile};
 use crate::process::Run;
 use crate::settings::AppSettings;
@@ -50,6 +55,18 @@ pub struct GameSession {
     /// Поиск виновника: цепочка прогонов с урезанными сборками.
     hunt: Option<Hunt>,
     hunt_ui: BisectUi,
+
+    /// Копии префикса для параллельных прогонов — по одной на рабочее
+    /// место, начиная со второго. Готовятся в фоне.
+    worker_prefixes: Vec<PathBuf>,
+    cloning: Job<Vec<PathBuf>>,
+}
+
+/// Метки прогонов: по ним снимаются процессы ровно одного прогона.
+static RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn next_tag() -> String {
+    format!("{}-{}", std::process::id(), RUN_COUNTER.fetch_add(1, Ordering::Relaxed))
 }
 
 impl GameSession {
@@ -98,7 +115,15 @@ impl GameSession {
     // ── Прогон сборки ────────────────────────────────────────────────────────
 
     pub fn start_test(&mut self, settings: &AppSettings, active: &[ModId]) -> Result<(), String> {
-        let run = self.build_run(settings, active)?;
+        // Поиск занимает ту же папку прогона и тот же префикс.
+        if self.hunt.as_ref().is_some_and(|h| !h.is_done()) {
+            return Err(tr("Идёт поиск виновника — дождитесь его конца или остановите.").to_string());
+        }
+        // Недоигранный прошлый тест снимается: его игра ещё может работать.
+        if let Some(previous) = &mut self.run {
+            previous.cancel();
+        }
+        let run = self.build_run(settings, active, 0)?;
         self.run = Some(run);
         self.tested = Some(active.to_vec());
         self.test_ui.reset();
@@ -126,40 +151,106 @@ impl GameSession {
     }
 
     /// Запускает поиск виновника по разбору последнего прогона.
-    pub fn start_hunt(&mut self, db: &ModDb, profile: &Profile) {
+    pub fn start_hunt(&mut self, db: &ModDb, profile: &Profile, settings: &AppSettings) {
         let issues = self.test_ui.issues().to_vec();
-        self.hunt = Some(Hunt::from_failed_run(db, profile, &issues));
+        let verdict = match self.run.as_ref().map(TestRun::phase) {
+            Some(Phase::Done(v)) => v.clone(),
+            _ => crate::testing::Verdict::LoadedWithErrors,
+        };
+        self.hunt = Some(Hunt::from_failed_run(db, profile, &verdict, &issues));
         self.hunt_ui.open = true;
+        self.prepare_workers(settings);
     }
 
-    /// Готовит прогон произвольного набора модов.
+    /// Нужны ли рабочим местам свои префиксы: только Windows-сборке под
+    /// Proton/wine — нативная игра префикса не имеет.
+    fn needs_prefix(settings: &AppSettings) -> bool {
+        let game = Path::new(&settings.game_path);
+        paths::find_executable(game).is_some_and(|exe| exe.needs_compat_layer())
+            && settings.launch.runner != launch::Runner::Native
+    }
+
+    /// Начинает готовить копии префикса для параллельных прогонов, если
+    /// их ещё нет. Поиск тем временем идёт в одном рабочем месте.
+    fn prepare_workers(&mut self, settings: &AppSettings) {
+        let wanted = settings.launch.parallel();
+        if wanted < 2 || !Self::needs_prefix(settings) || matches!(self.cloning, Job::Running(_)) {
+            return;
+        }
+        let Some(main) = self.prefix(settings) else { return };
+        let dirs: Vec<PathBuf> =
+            (1..wanted).filter_map(|w| workers::clone_dir(&main, w)).collect();
+        if dirs.len() == self.worker_prefixes.len()
+            && dirs.iter().all(|d| workers::is_ready(&main, d))
+        {
+            return;
+        }
+        self.worker_prefixes.clear();
+        self.cloning = Job::spawn(move || {
+            for dir in &dirs {
+                workers::ensure_clone(&main, dir)
+                    .map_err(|e| trf!("Не удалось подготовить префикс {dir}: {e}", dir = dir.display(), e))?;
+            }
+            Ok(dirs)
+        });
+    }
+
+    /// Сколько прогонов поиска можно держать одновременно прямо сейчас.
+    fn available_workers(&mut self, settings: &AppSettings) -> usize {
+        if self.cloning.poll() {
+            match std::mem::take(&mut self.cloning) {
+                Job::Done(dirs) => self.worker_prefixes = dirs,
+                Job::Failed(e) => tracing::warn!("Prefix copy failed: {e}"),
+                other => self.cloning = other,
+            }
+        }
+        let wanted = settings.launch.parallel();
+        if Self::needs_prefix(settings) {
+            wanted.min(1 + self.worker_prefixes.len())
+        } else {
+            wanted
+        }
+    }
+
+    /// Готовит прогон произвольного набора модов в рабочем месте `worker`.
     ///
     /// Общее для обычного теста и для поиска виновника: настройки, план
     /// запуска и уборка процессов у них одни и те же, разный только состав.
-    fn build_run(&mut self, settings: &AppSettings, active: &[ModId]) -> Result<TestRun, String> {
-        let Some(prefix) = self.prefix(settings) else {
-            return Err(tr("Не найден wine-префикс: укажите его в Настройки → Запуск.").to_string());
-        };
+    /// У каждого рабочего места свой префикс и своя папка данных.
+    fn build_run(&mut self, settings: &AppSettings, active: &[ModId], worker: usize) -> Result<TestRun, String> {
         if settings.config_path.is_empty() {
             return Err(
                 tr("Не задан путь к конфигу игры — прогону некуда положить сборку.").to_string()
             );
         }
+        let windows_side = Self::needs_prefix(settings);
+        let prefix = match worker {
+            0 => self.prefix(settings),
+            n => self.worker_prefixes.get(n - 1).cloned(),
+        };
+        if windows_side && prefix.is_none() {
+            return Err(tr("Не найден wine-префикс: укажите его в Настройки → Запуск.").to_string());
+        }
 
-        let game = std::path::Path::new(&settings.game_path);
-        let config_dir = std::path::PathBuf::from(&settings.config_path);
+        let game = Path::new(&settings.game_path);
+        let config_dir = PathBuf::from(&settings.config_path);
         // Своя папка данных прогона — рядом с Player.log, в папке данных
         // игры: под umu игра работает в контейнере со своим /tmp, и папку
-        // на произвольном пути хост не увидит. Лог — туда же.
-        let save_data = config_dir
-            .parent()
-            .unwrap_or(&config_dir)
-            .join("RustRim")
-            .join("test");
+        // на произвольном пути хост не увидит. Лог — туда же. Второе и
+        // следующие рабочие места живут в своих копиях префикса — их папка
+        // лежит там же, на диске C: копии.
+        let data_dir = config_dir.parent().unwrap_or(&config_dir);
+        let save_data = match (worker, &prefix) {
+            (0, _) => data_dir.join("RustRim").join("test"),
+            (_, Some(clone)) if windows_side => clone.join("drive_c").join("rustrim").join("test"),
+            (n, _) => data_dir.join("RustRim").join(format!("test-{}", n + 1)),
+        };
         let log_file = save_data.join("quicktest.log");
 
         let mut launch_settings = settings.launch.clone();
-        launch_settings.prefix = prefix.to_string_lossy().into_owned();
+        if let Some(prefix) = &prefix {
+            launch_settings.prefix = prefix.to_string_lossy().into_owned();
+        }
         let mode = launch::Mode::QuickTest {
             log_file: log_file.clone(),
             save_data: Some(save_data.clone()),
@@ -167,9 +258,9 @@ impl GameSession {
         let plan = launch::plan(game, &launch_settings, &mode).map_err(|e| e.to_string())?;
 
         let mut config = testing::Config::new(config_dir, save_data, log_file);
-        if let Some(exe) = paths::find_executable(game) {
-            config.cleanup = Some((prefix, exe.path().to_path_buf()));
-        }
+        // Своя метка у каждого прогона: путь к игре у параллельных прогонов
+        // общий, и по нему один снял бы и другой, и игру самого игрока.
+        config.cleanup = Some(Owner::Tag(next_tag()));
 
         TestRun::start(plan.to_command(), plan.display(), config, active)
             .map_err(|e| trf!("Не удалось запустить прогон: {e}", e))
@@ -200,7 +291,7 @@ impl GameSession {
         self.show_launch(ctx);
         let reply = self.show_test(ctx, db, profile, settings);
         match reply {
-            Reply::None => self.show_hunt(ctx, db, profile, settings),
+            Reply::None => self.show_hunt(ctx, db, settings),
             other => other,
         }
     }
@@ -254,31 +345,29 @@ impl GameSession {
                 }
             }
             test_panel::Reply::Bisect => {
-                self.start_hunt(db, profile);
+                self.start_hunt(db, profile, settings);
                 Reply::None
             }
             test_panel::Reply::Select(id) => Reply::Select(id),
         }
     }
 
-    fn show_hunt(
-        &mut self,
-        ctx: &Context,
-        db: &ModDb,
-        profile: &Profile,
-        settings: &AppSettings,
-    ) -> Reply {
+    fn show_hunt(&mut self, ctx: &Context, db: &ModDb, settings: &AppSettings) -> Reply {
         let mut failure = None;
         // Поиск на время работы вынимается: чтобы запустить очередной прогон,
         // ему нужен build_run, а тот забирает сессию целиком.
         if let Some(mut hunt) = self.hunt.take() {
-            hunt.poll(db, profile);
-            if let Some(active) = hunt.wants_run() {
-                match self.build_run(settings, &active) {
+            if !hunt.is_done() {
+                hunt.set_workers(self.available_workers(settings));
+            }
+            hunt.poll();
+            while let Some(request) = hunt.wants_run() {
+                match self.build_run(settings, &request.active, request.worker) {
                     Ok(run) => hunt.attach(run),
                     Err(e) => {
                         failure = Some(e);
                         hunt.cancel();
+                        break;
                     }
                 }
             }
@@ -291,7 +380,8 @@ impl GameSession {
             return Reply::Failed(e);
         }
 
-        match bisect_panel::show(ctx, &mut self.hunt_ui, self.hunt.as_ref(), db) {
+        let preparing = matches!(self.cloning, Job::Running(_));
+        match bisect_panel::show(ctx, &mut self.hunt_ui, self.hunt.as_ref(), db, preparing) {
             bisect_panel::Reply::None => Reply::None,
             bisect_panel::Reply::Cancel => {
                 if let Some(hunt) = &mut self.hunt {

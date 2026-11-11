@@ -533,6 +533,26 @@ fn launch_tab(ui: &mut egui::Ui, settings: &mut AppSettings, prefixes: &[Prefix]
     hint(ui, tr("Имя (GE-Proton — последний установленный) или полный путь к версии."));
 
     ui.add_space(10.0);
+    section_header(ui, tr("ПРОГОНЫ ТЕСТА И ПОИСКА"));
+    ui.add_space(4.0);
+    checkbox_row(ui, &mut settings.launch.background_tests, tr("Без окна на экране"));
+    ui.add_space(2.0);
+    if launch::background_available() {
+        hint(ui, tr("Игра рисует на видеокарте, но в невидимый экран (cage). Обычный запуск — как прежде, с окном."));
+    } else {
+        hint(ui, tr("cage не найден — прогоны пойдут с окном. Установите cage (на NixOS: pkgs.cage)."));
+    }
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.add_space(10.0);
+        ui.label(RichText::new(tr("Прогонов поиска одновременно:")).color(theme::TEXT_PRIMARY).size(12.0));
+        ui.add_space(6.0);
+        ui.add(egui::Slider::new(&mut settings.launch.parallel_runs, 1..=launch::MAX_PARALLEL_RUNS).text(""));
+    });
+    ui.add_space(2.0);
+    hint(ui, tr("Каждый — отдельный экземпляр игры, от 2 ГБ памяти. Второму и следующим нужна своя копия префикса (~300 МБ), она создаётся при первом поиске."));
+
+    ui.add_space(10.0);
     section_header(ui, tr("ДОПОЛНИТЕЛЬНЫЕ АРГУМЕНТЫ"));
     ui.add_space(4.0);
     text_row(ui, &mut settings.launch.extra_args, "extra_args_edit", "-popupwindow");

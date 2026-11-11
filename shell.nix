@@ -27,6 +27,8 @@ pkgs.mkShell {
     # zenity — его fallback, если портал недоступен.
     dbus
     zenity
+    # Прогоны теста без окна на экране: игра рисует в невидимый вывод.
+    cage
     gtk3
     glib
     pkg-config

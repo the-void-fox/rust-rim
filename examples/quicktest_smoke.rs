@@ -4,6 +4,7 @@
 // Конфиг игрока не трогается: прогон идёт в своей папке данных
 // (<данные игры>/RustRim/test) через -savedatafolder.
 
+use rust_rim::game::teardown::Owner;
 use rust_rim::game::{launch, paths};
 use rust_rim::mod_data::{parse_mods_config, scan_dlc_mods, scan_local_mods, ModDb, Profile};
 use rust_rim::testing::{Config, Phase, TestRun};
@@ -34,10 +35,9 @@ fn main() {
     };
     let plan = launch::plan(game, &settings, &mode).expect("не удалось собрать команду");
 
-    let exe = paths::find_executable(game).expect("игра не найдена");
     let mut cfg = Config::new(config_dir, save_data, log_file);
     cfg.timeout = std::time::Duration::from_secs(300);
-    cfg.cleanup = Some((prefix.path.clone(), exe.path().to_path_buf()));
+    cfg.cleanup = Some(Owner::Tag(format!("smoke-{}", std::process::id())));
     println!("Порог тишины: {:?}, предел: {:?}\n", cfg.settle, cfg.timeout);
 
     let mut run = TestRun::start(plan.to_command(), plan.display(), cfg, profile.order())

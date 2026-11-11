@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crate::game::teardown;
+use crate::game::teardown::{self, Owner};
 use crate::log_analysis::{self, LogIssue, ModIndex, Severity};
 use crate::mod_data::{write_mods_config, ModDb, ModId, Profile};
 use crate::process::Run;
@@ -53,6 +53,34 @@ const REPEAT_MARKER: &str = "Duplicate stacktrace, see ref for original";
 /// Столько повторов — это уже поток, а не хвост загрузки.
 const STORM_REPEATS: usize = 40;
 
+/// Так Unity начинает дамп нативного краша. Дальше игра не идёт, но процесс
+/// может жить: crash handler держит его, пока не допишет отчёт, — проверено,
+/// что без этой проверки прогон висел до общего предела в 10 минут.
+const CRASH_MARKER: &str = "Crash!!!";
+/// Конец дампа: дальше Unity уже ничего полезного не напишет.
+const CRASH_END: &str = "========== END OF STACKTRACE";
+/// Сколько ждать конца дампа после `Crash!!!`. Снять игру сразу нельзя:
+/// стек, по которому виден мод, идёт после ~60 строк заголовка, и на живом
+/// прогоне от дампа успевало записаться 9 строк.
+const CRASH_GRACE: Duration = Duration::from_secs(15);
+
+/// Сколько лог может молчать посреди загрузки модов, прежде чем считать
+/// загрузку зависшей. Растёт со сборкой: на живых прогонах самая длинная
+/// честная пауза была 14 с на 25 модах и 30 с на 61.
+pub fn load_stall_for(mods: usize) -> Duration {
+    Duration::from_secs(120).max(Duration::from_secs(2 * mods as u64))
+}
+
+/// Без лога и почти без CPU столько времени — запуск встал, не начавшись.
+/// Первый запуск umu может минутами качать рантайм, но тогда процессор
+/// занят, и это правило молчит.
+const START_STALL: Duration = Duration::from_secs(90);
+/// За какое окно меряется простой процессора.
+const IDLE_WINDOW: Duration = Duration::from_secs(60);
+/// Какая доля окна процессорного времени — это ещё «стоит»: 1 с за минуту,
+/// меньше 2% одного ядра. Скачивающий рантайм umu тратит заметно больше.
+const IDLE_SHARE: u32 = 60;
+
 #[derive(Clone, Debug)]
 pub struct Config {
     /// Папка Config игрока. Из неё копируются настройки игры и модов;
@@ -68,9 +96,15 @@ pub struct Config {
     /// Потолок ожидания тишины, отсчитывается от конца загрузки.
     pub settle_cap: Duration,
     pub timeout: Duration,
-    /// Чем добивать цепочку wine/Proton: (префикс, путь к exe).
-    /// Без этого игра переживает снятие процесса-обёртки.
-    pub cleanup: Option<(PathBuf, PathBuf)>,
+    /// Как найти процессы прогона, чтобы добить цепочку wine/Proton: без
+    /// этого игра переживает снятие процесса-обёртки. Метку
+    /// [`Owner::Tag`] прогон сам передаёт команде.
+    pub cleanup: Option<Owner>,
+    /// Сколько лог может молчать посреди загрузки. `None` — по размеру
+    /// сборки ([`load_stall_for`]).
+    pub load_stall: Option<Duration>,
+    /// Сколько ждать первой строки лога при простаивающем процессоре.
+    pub start_stall: Duration,
 }
 
 impl Config {
@@ -83,6 +117,8 @@ impl Config {
             settle_cap: DEFAULT_SETTLE_CAP,
             timeout: DEFAULT_TIMEOUT,
             cleanup: None,
+            load_stall: None,
+            start_stall: START_STALL,
         }
     }
 }
@@ -116,6 +152,15 @@ pub enum Verdict {
     DiedWhileLoading,
     /// Не уложились в отведённое время.
     TimedOut,
+    /// Нативный краш Unity (`Crash!!!` в логе).
+    NativeCrash,
+    /// Загрузка модов началась и встала: лог молчит дольше, чем бывает
+    /// даже на большой сборке.
+    HungWhileLoading,
+    /// Игра так и не начала писать лог, и процессы не тратят CPU.
+    StuckOnStart,
+    /// Искомая ошибка уже в логе — прогон остановлен, не дожидаясь конца.
+    StoppedOnTarget,
     /// Прогон остановлен пользователем.
     Cancelled,
 }
@@ -138,6 +183,10 @@ pub struct TestRun {
     /// Когда лог впервые сообщил, что загрузка позади.
     loaded_at: Option<Instant>,
     last_poll: Option<Instant>,
+    /// Замеры CPU всех процессов прогона, пока лога нет: (когда, сколько).
+    cpu_samples: Vec<(Instant, Duration)>,
+    /// Когда в логе появился `Crash!!!`.
+    crashed_at: Option<Instant>,
     phase: Phase,
 }
 
@@ -147,7 +196,7 @@ impl TestRun {
     /// Команда должна передать игре ту же папку через `-savedatafolder` —
     /// её собирает [`crate::game::launch::plan`] из `Mode::QuickTest`.
     pub fn start(
-        command: Command,
+        mut command: Command,
         command_text: String,
         config: Config,
         active: &[ModId],
@@ -155,6 +204,9 @@ impl TestRun {
         prepare_save_data(&config.config_dir, &config.save_data, active)?;
         // Старый лог мешает: по нему нельзя отличить прошлый прогон от текущего.
         let _ = std::fs::remove_file(&config.log_file);
+        if let Some(Owner::Tag(tag)) = &config.cleanup {
+            command.env(teardown::TAG_VAR, tag);
+        }
 
         let run = Run::spawn(command, command_text)?;
         let now = Instant::now();
@@ -167,6 +219,8 @@ impl TestRun {
             last_growth: now,
             loaded_at: None,
             last_poll: None,
+            cpu_samples: Vec::new(),
+            crashed_at: None,
             phase: Phase::Starting,
         })
     }
@@ -212,9 +266,27 @@ impl TestRun {
         }
         let stage = progress(&text);
 
+        if self.crashed_at.is_some() || has_crash(&text) {
+            let since = *self.crashed_at.get_or_insert_with(Instant::now);
+            let dump_written = text.lines().any(|l| l.starts_with(CRASH_END));
+            let gone = !self.run.is_running() && !self.game_alive();
+            if dump_written || gone || since.elapsed() >= CRASH_GRACE {
+                self.stop_game();
+                self.phase = Phase::Done(Verdict::NativeCrash);
+            }
+            return &self.phase;
+        }
+
         // Поток повторяющихся исключений: тишины не будет никогда, ждать её
         // бессмысленно. Ответ у нас уже есть — сборка неиграбельна.
-        if stage != Progress::NotStarted && text.matches(REPEAT_MARKER).count() >= STORM_REPEATS {
+        // Только после загрузки: во время неё поток голых NullReferenceException
+        // бывает и проходит сам (живой случай — 43 повтора сразу после
+        // перезапуска Prepatcher), а прогон, оборванный на нём, не доходил
+        // до генерации карты, где и была настоящая ошибка.
+        let after_load = text
+            .find("unused Assets to reduce memory usage")
+            .map_or("", |at| &text[at..]);
+        if stage == Progress::Loaded && after_load.matches(REPEAT_MARKER).count() >= STORM_REPEATS {
             self.stop_game();
             self.phase = Phase::Done(Verdict::ErrorStorm);
             return &self.phase;
@@ -241,6 +313,11 @@ impl TestRun {
         }
 
         let quiet = self.last_growth.elapsed();
+        if let Some(stalled) = self.stall(stage, quiet) {
+            self.stop_game();
+            self.phase = Phase::Done(stalled);
+            return &self.phase;
+        }
         // Тишина засчитывается только после завершения загрузки: иначе
         // пауза посреди разбора модов сошла бы за успех.
         self.phase = match stage {
@@ -261,26 +338,64 @@ impl TestRun {
         &self.phase
     }
 
+    /// Встал ли прогон, не дойдя до конца загрузки.
+    fn stall(&mut self, stage: Progress, quiet: Duration) -> Option<Verdict> {
+        match stage {
+            Progress::Started => {
+                let limit = self.config.load_stall.unwrap_or_else(|| load_stall_for(self.active.len()));
+                (quiet >= limit).then_some(Verdict::HungWhileLoading)
+            }
+            Progress::NotStarted if self.log_len == 0 => {
+                let owner = self.config.cleanup.as_ref()?;
+                let window = IDLE_WINDOW.min(self.config.start_stall * 2 / 3);
+                let now = Instant::now();
+                // Шесть замеров на окно: скан /proc на каждом опросе не нужен.
+                if self.cpu_samples.last().is_none_or(|(t, _)| t.elapsed() >= window / 6) {
+                    self.cpu_samples.push((now, teardown::cpu_time(owner)));
+                }
+                if self.started.elapsed() < self.config.start_stall {
+                    return None;
+                }
+                // Ближайший замер, которому уже не меньше окна.
+                let (_, before) = self
+                    .cpu_samples
+                    .iter()
+                    .rev()
+                    .find(|(t, _)| now.duration_since(*t) >= window)?;
+                let (_, latest) = self.cpu_samples.last()?;
+                (latest.saturating_sub(*before) < window / IDLE_SHARE).then_some(Verdict::StuckOnStart)
+            }
+            _ => None,
+        }
+    }
+
     /// Останавливает прогон досрочно.
     pub fn cancel(&mut self) {
+        self.conclude(Verdict::Cancelled);
+    }
+
+    /// Завершает прогон с готовым ответом: снимает игру, не дожидаясь,
+    /// пока она дойдёт до конца сама. Так поиск виновника останавливает
+    /// прогон, как только искомая ошибка появилась в логе.
+    pub fn conclude(&mut self, verdict: Verdict) {
+        if matches!(self.phase, Phase::Done(_)) {
+            return;
+        }
         self.stop_game();
-        self.phase = Phase::Done(Verdict::Cancelled);
+        self.phase = Phase::Done(verdict);
     }
 
     /// Остались ли живые процессы игры. Скан /proc делается только когда
     /// обёртка уже вышла, а не каждый опрос.
     fn game_alive(&self) -> bool {
-        match &self.config.cleanup {
-            Some((prefix, exe)) => teardown::any_running(prefix, exe),
-            None => false,
-        }
+        self.config.cleanup.as_ref().is_some_and(teardown::any_running)
     }
 
     /// Снимает и обёртку, и всё, что она за собой оставила.
     fn stop_game(&mut self) {
         self.run.kill();
-        if let Some((prefix, exe)) = &self.config.cleanup {
-            teardown::stop(prefix, exe);
+        if let Some(owner) = &self.config.cleanup {
+            teardown::stop(owner);
         }
     }
 
@@ -323,6 +438,11 @@ fn progress(log: &str) -> Progress {
         }
     }
     if started { Progress::Started } else { Progress::NotStarted }
+}
+
+/// Есть ли в логе дамп нативного краша.
+fn has_crash(log: &str) -> bool {
+    log.lines().any(|line| line.trim_end() == CRASH_MARKER)
 }
 
 fn verdict_from_log(log: &str) -> Verdict {
@@ -640,6 +760,88 @@ mod tests {
     }
 
     #[test]
+    fn a_native_crash_ends_the_run_even_if_the_process_lingers() {
+        // Crash handler держит процесс, пока пишет отчёт, — ждать его нельзя.
+        let t = Temp::new("crash_handler");
+        let log = t.0.join("game.log");
+        let cfg = Config::new(t.0.join("Config"), t.0.join("run"), log.clone());
+        let cmd = fake_game(
+            &log,
+            "printf 'RimWorld 1.6\\nCrash!!!\\nSymInit: x\\n' > '{log}'; sleep 1; \
+             printf '0x1 (Mono JIT Code) Mod.Class:Method ()\\n========== END OF STACKTRACE ===========\\n' >> '{log}'; sleep 30",
+        );
+        let mut run = TestRun::start(cmd, "fake".into(), cfg, &ids(&["a.mod"])).unwrap();
+        assert_eq!(drive(&mut run, Duration::from_secs(10)), Verdict::NativeCrash);
+        // Дамп дописан до конца — по его стеку ищется виновник.
+        assert!(run.log_text().contains("Mod.Class:Method"), "игру сняли раньше конца дампа");
+    }
+
+    #[test]
+    fn a_crash_whose_process_exits_is_still_a_crash() {
+        let t = Temp::new("crash_exit");
+        let log = t.0.join("game.log");
+        let cfg = Config::new(t.0.join("Config"), t.0.join("run"), log.clone());
+        let cmd = fake_game(&log, "printf 'RimWorld 1.6\\nCrash!!!\\n' > '{log}'; sleep 0.5; exit 1");
+        let mut run = TestRun::start(cmd, "fake".into(), cfg, &ids(&["a.mod"])).unwrap();
+        assert_eq!(drive(&mut run, Duration::from_secs(10)), Verdict::NativeCrash);
+    }
+
+    #[test]
+    fn loading_that_goes_silent_is_a_hang() {
+        let t = Temp::new("hang");
+        let log = t.0.join("game.log");
+        let mut cfg = Config::new(t.0.join("Config"), t.0.join("run"), log.clone());
+        cfg.load_stall = Some(Duration::from_millis(500));
+        // Версия есть, конца загрузки нет, лог больше не растёт.
+        let cmd = fake_game(&log, "printf 'RimWorld 1.6.4633\\nLoading mods\\n' > '{log}'; sleep 30");
+        let mut run = TestRun::start(cmd, "fake".into(), cfg, &ids(&["a.mod"])).unwrap();
+        assert_eq!(drive(&mut run, Duration::from_secs(10)), Verdict::HungWhileLoading);
+    }
+
+    #[test]
+    fn the_hang_threshold_grows_with_the_build() {
+        assert_eq!(load_stall_for(25), Duration::from_secs(120));
+        assert_eq!(load_stall_for(300), Duration::from_secs(600));
+    }
+
+    #[test]
+    fn a_start_without_log_and_without_cpu_is_stuck() {
+        let t = Temp::new("stuck");
+        let log = t.0.join("game.log");
+        let mut cfg = Config::new(t.0.join("Config"), t.0.join("run"), log.clone());
+        cfg.start_stall = Duration::from_millis(900);
+        cfg.cleanup = Some(Owner::Tag(format!("test-stuck-{}", std::process::id())));
+        let cmd = fake_game(&log, "sleep 30");
+        let mut run = TestRun::start(cmd, "fake".into(), cfg, &ids(&["a.mod"])).unwrap();
+        assert_eq!(drive(&mut run, Duration::from_secs(10)), Verdict::StuckOnStart);
+    }
+
+    #[test]
+    fn a_busy_start_without_log_is_not_stuck() {
+        // Так выглядит первый запуск umu, который качает рантайм.
+        let t = Temp::new("busy");
+        let log = t.0.join("game.log");
+        let mut cfg = Config::new(t.0.join("Config"), t.0.join("run"), log.clone());
+        cfg.start_stall = Duration::from_millis(900);
+        cfg.timeout = Duration::from_secs(3);
+        cfg.cleanup = Some(Owner::Tag(format!("test-busy-{}", std::process::id())));
+        let cmd = fake_game(&log, "while true; do :; done");
+        let mut run = TestRun::start(cmd, "fake".into(), cfg, &ids(&["a.mod"])).unwrap();
+        assert_eq!(drive(&mut run, Duration::from_secs(10)), Verdict::TimedOut);
+    }
+
+    #[test]
+    fn conclude_stops_the_run_with_the_given_answer() {
+        let t = Temp::new("conclude");
+        let log = t.0.join("game.log");
+        let cfg = Config::new(t.0.join("Config"), t.0.join("run"), log.clone());
+        let cmd = fake_game(&log, "printf 'RimWorld 1.6\\n' > '{log}'; sleep 30");
+        let mut run = TestRun::start(cmd, "fake".into(), cfg, &ids(&["a.mod"])).unwrap();
+        run.conclude(Verdict::StoppedOnTarget);
+        assert_eq!(run.poll(), &Phase::Done(Verdict::StoppedOnTarget));
+    }
+
+    #[test]
     fn progress_needs_more_than_the_version_line() {
         // Реальный обрыв: лог заканчивался строкой версии, и прогон
         // засчитывался как успешный, хотя моды не догрузились.
@@ -676,6 +878,24 @@ mod tests {
         let mut run = TestRun::start(cmd, "fake".into(), cfg, &ids(&["a.mod"])).unwrap();
 
         assert_eq!(drive(&mut run, Duration::from_secs(10)), Verdict::ErrorStorm);
+    }
+
+    #[test]
+    fn repeats_during_loading_do_not_end_the_run() {
+        let t = Temp::new("storm_loading");
+        let log = t.0.join("game.log");
+        let mut cfg = Config::new(t.0.join("Config"), t.0.join("run"), log.clone());
+        cfg.settle = Duration::from_millis(300);
+        let cmd = fake_game(
+            &log,
+            "printf 'RimWorld 1.6\\n' > '{log}'; i=0; while [ $i -lt 60 ]; do \
+             printf 'NullReferenceException: x\\n[Ref ABC] Duplicate stacktrace, see ref for original\\n' >> '{log}'; \
+             i=$((i+1)); done; sleep 1; \
+             printf 'Unloading 99 unused Assets to reduce memory usage.\\n' >> '{log}'; sleep 30",
+        );
+        let mut run = TestRun::start(cmd, "fake".into(), cfg, &ids(&["a.mod"])).unwrap();
+        // Загрузка дошла до конца: вердикт по логу, а не обрыв на потоке.
+        assert_eq!(drive(&mut run, Duration::from_secs(10)), Verdict::LoadedWithErrors);
     }
 
     #[test]

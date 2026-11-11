@@ -37,6 +37,14 @@ const LOCALIZATION_NOISE: &[&str] = &[
 /// Хвост строки, которым мод Harmony заменяет повторный стек.
 const DUPLICATE_STACK: &str = "Duplicate stacktrace";
 
+/// Начало и конец дампа нативного краша Unity.
+const CRASH_START: &str = "Crash!!!";
+const CRASH_END: &str = "========== END OF STACKTRACE";
+/// Дамп длинный: список модулей, потом стек. Больше — уже не он.
+const MAX_CRASH_LINES: usize = 600;
+/// Тип «исключения» у записи о краше: по нему краш отличается в причинах.
+pub const NATIVE_CRASH: &str = "NativeCrash";
+
 /// Шум ли это — запись, которую в отчёт пускать не надо.
 fn is_noise(line: &str) -> bool {
     let lower = line.to_lowercase();
@@ -198,6 +206,59 @@ fn exception_type(lines: &[String]) -> Option<String> {
     })
 }
 
+/// Управляемый кадр из дампа краша:
+/// `0x… (Mono JIT Code) [file.cs:12] Ns.Class:Method (args)`.
+fn crash_frame(line: &str) -> Option<Frame> {
+    let (_, mut rest) = line.split_once("(Mono JIT Code) ")?;
+    if rest.starts_with('[') {
+        rest = rest.split_once("] ")?.1;
+    }
+    let mut patched = false;
+    if let Some(wrapped) = rest.strip_prefix("(wrapper ") {
+        let (kind, tail) = wrapped.split_once(") ")?;
+        // Служебный вход в управляемый код — не улика и не место падения.
+        if kind == "runtime-invoke" {
+            return None;
+        }
+        patched = kind == "dynamic-method";
+        rest = tail;
+    }
+    // Метод, подменённый Harmony: `MonoMod.Utils.DynamicMethodDefinition:Ns.Class.Method_Patch1`.
+    if let Some(tail) = rest.strip_prefix("MonoMod.Utils.DynamicMethodDefinition:") {
+        patched = true;
+        rest = tail;
+    }
+    let head = rest.split([' ', '(']).next()?;
+    (!head.is_empty()).then(|| Frame {
+        method: head.replace(':', "."),
+        patched,
+        patches: Vec::new(),
+    })
+}
+
+/// Дамп нативного краша целиком — одной записью. Иначе строки дампа, где
+/// встречается слово «Exception», всплывали отдельными «ошибками» без смысла.
+fn collect_crash(lines: &[&str], start: usize) -> (Entry, usize) {
+    let mut entry = Entry {
+        lines: vec![lines[start].trim_end().to_string()],
+        frames: Vec::new(),
+        reference: None,
+    };
+    let mut j = start + 1;
+    while j < lines.len() && j - start < MAX_CRASH_LINES {
+        let line = lines[j];
+        j += 1;
+        if let Some(frame) = crash_frame(line) {
+            entry.lines.push(line.trim_end().to_string());
+            entry.frames.push(frame);
+        }
+        if line.starts_with(CRASH_END) {
+            break;
+        }
+    }
+    (entry, j)
+}
+
 /// Одна запись лога, как она есть в тексте.
 struct Entry {
     lines: Vec<String>,
@@ -325,6 +386,29 @@ pub fn parse_log(text: &str) -> Vec<LogIssue> {
 
     let mut i = 0;
     while i < lines.len() {
+        if lines[i].trim_end() == CRASH_START {
+            let (entry, next) = collect_crash(&lines, i);
+            i = next.max(i + 1);
+            match by_signature.get("crash") {
+                Some(&idx) => issues[idx].count += 1,
+                None => {
+                    by_signature.insert("crash".into(), issues.len());
+                    issues.push(LogIssue {
+                        severity: Severity::Error,
+                        title: entry.lines[0].clone(),
+                        full_text: entry.lines.join("\n"),
+                        count: 1,
+                        frames: entry.frames,
+                        exception: Some(NATIVE_CRASH.to_string()),
+                        cause: String::new(),
+                        suspects: Vec::new(),
+                        harmony_hint: None,
+                    });
+                }
+            }
+            continue;
+        }
+
         // Шум пропускается записью целиком, вместе со стеком: иначе строка
         // вида «System.ArgumentNullException: …» из его трассы всплыла бы
         // отдельной ошибкой уже без узнаваемого заголовка.
@@ -429,6 +513,38 @@ mod tests {
             classify_start("[Mod] Patch operation Verse.PatchOperationRemove(/Defs/X) failed"),
             Some(Severity::Error),
         );
+    }
+
+    #[test]
+    fn a_crash_dump_is_one_issue_with_managed_frames() {
+        // Сокращённый дамп из живого прогона: краш в конструкторе мода.
+        let log = "RimWorld 1.6.4633 rev1261\n\
+Crash!!!\n\
+SymInit: Symbol-SearchPath: '.;X:\\Games'\n\
+X:\\Games\\RimWorldWin64.exe:RimWorldWin64.exe (00006FFFFD7D0000), size: 688128\n\
+========== OUTPUTTING STACK TRACE ==================\n\
+0x00006FFFFC0CC08F (unityplayer) (function-name not available)\n\
+0x00000000655D1EBB (Mono JIT Code) Verse.DirectXmlToObject:ObjectFromXml<T_REF> (System.Xml.XmlNode,bool)\n\
+0x000000013206DA0B (Mono JIT Code) CompactWorkTab.CompactWorkTab:.ctor (Verse.ModContentPack)\n\
+0x000000013206DC09 (Mono JIT Code) (wrapper runtime-invoke) <Module>:runtime_invoke_void__this___object (object,intptr,intptr,intptr)\n\
+0x000000006230D590 (Mono JIT Code) (wrapper managed-to-native) System.Reflection.RuntimeConstructorInfo:InternalInvoke (System.Reflection.RuntimeConstructorInfo,object,object[],System.Exception&)\n\
+0x000000007FC99493 (Mono JIT Code) (wrapper dynamic-method) MonoMod.Utils.DynamicMethodDefinition:RimWorld.UIRoot_Play.UIRootOnGUI_Patch1 (RimWorld.UIRoot_Play)\n\
+========== END OF STACKTRACE ===========\n\
+\n\
+A crash has been intercepted by the crash handler.\n";
+        let issues = parse_log(log);
+        assert_eq!(issues.len(), 1, "{:#?}", issues.iter().map(|i| &i.title).collect::<Vec<_>>());
+        let crash = &issues[0];
+        assert_eq!(crash.title, "Crash!!!");
+        let methods: Vec<&str> = crash.frames.iter().map(|f| f.method.as_str()).collect();
+        assert_eq!(methods, [
+            "Verse.DirectXmlToObject.ObjectFromXml<T_REF>",
+            "CompactWorkTab.CompactWorkTab..ctor",
+            "System.Reflection.RuntimeConstructorInfo.InternalInvoke",
+            "RimWorld.UIRoot_Play.UIRootOnGUI_Patch1",
+        ]);
+        assert!(crash.frames[3].patched);
+        assert_eq!(crash.cause, "NativeCrash|at:CompactWorkTab.CompactWorkTab..ctor");
     }
 
     #[test]

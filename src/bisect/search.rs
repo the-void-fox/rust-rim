@@ -29,6 +29,9 @@ use crate::testing::Verdict;
 pub enum Target {
     /// Любой провал: прогон не закончился успехом.
     AnyFailure,
+    /// Нативный краш Unity: исходный прогон упал целиком, и именно это
+    /// ищется. Стек краша от прогона к прогону разный, сам краш — нет.
+    Crash,
     /// Причина ошибки из исходного прогона ([`LogIssue::cause`]).
     ///
     /// Точнее, чем «любой провал»: урезанная сборка может падать по своей
@@ -47,6 +50,16 @@ pub enum Target {
 }
 
 impl Target {
+    /// Выбирает цель по исходному прогону. Краш важнее любой записи в логе:
+    /// ошибки до него могли быть и безобидными.
+    pub fn from_run(verdict: &Verdict, issues: &[LogIssue]) -> Self {
+        if *verdict == Verdict::NativeCrash {
+            Target::Crash
+        } else {
+            Self::from_issues(issues)
+        }
+    }
+
     /// Выбирает цель по разбору исходного прогона: причину, за которой
     /// больше всего вхождений ошибок.
     pub fn from_issues(issues: &[LogIssue]) -> Self {
@@ -79,11 +92,29 @@ impl Target {
 
     /// Воспроизвелась ли проблема в очередном прогоне.
     pub fn matches(&self, verdict: &Verdict, issues: &[LogIssue]) -> bool {
+        if *verdict == Verdict::StoppedOnTarget {
+            return true;
+        }
         match self {
             Target::AnyFailure => !matches!(verdict, Verdict::Passed),
+            Target::Crash => *verdict == Verdict::NativeCrash,
             Target::Cause { key, .. } => issues
                 .iter()
                 .any(|i| i.severity == Severity::Error && &i.cause == key),
+        }
+    }
+
+    /// Видна ли проблема в логе прогона, который ещё идёт.
+    ///
+    /// По ней прогон останавливается, не дожидаясь конца: ответ
+    /// «воспроизвелось» уже есть. Записи — из [`crate::log_analysis::parse_log`],
+    /// без подозреваемых: причине они не нужны. Краш прогон ловит сам.
+    pub fn found_in(&self, issues: &[LogIssue]) -> bool {
+        match self {
+            // Любая ошибка в логе — и прогон уже не пройдёт.
+            Target::AnyFailure => issues.iter().any(|i| i.severity == Severity::Error),
+            Target::Crash => false,
+            Target::Cause { .. } => self.matches(&Verdict::LoadedWithErrors, issues),
         }
     }
 
@@ -94,6 +125,7 @@ impl Target {
             .filter(|i| i.severity == Severity::Error)
             .filter(|i| match self {
                 Target::AnyFailure => true,
+                Target::Crash => i.exception.as_deref() == Some(crate::log_analysis::NATIVE_CRASH),
                 Target::Cause { key, .. } => &i.cause == key,
             })
             .collect()
@@ -210,6 +242,7 @@ enum Stage {
 
 /// Состояние поиска. Двигается снаружи: [`Search::next`] выдаёт набор,
 /// [`Search::record`] принимает ответ.
+#[derive(Clone)]
 pub struct Search {
     /// Порядок загрузки исходной сборки — по нему выстраиваются наборы.
     order: Vec<ModId>,
@@ -353,6 +386,42 @@ impl Search {
                 }
             }
         }
+    }
+
+    /// Ближайшие наборы, которые понадобятся, если ни один из них не
+    /// воспроизведёт проблему, — что гонять параллельно.
+    ///
+    /// Первый — тот же, что отдаёт [`Search::next`]. Остальные — догадка:
+    /// если проблема воспроизведётся раньше, поиск свернёт в другую сторону
+    /// и они станут не нужны. Но «не воспроизвелось» в переборе частей —
+    /// самый частый ответ, и тогда их результат уже готов.
+    pub fn plan(&self, n: usize) -> Vec<Candidate> {
+        let mut sim = self.clone();
+        let mut out = Vec::new();
+        while out.len() < n {
+            let Some(candidate) = sim.next() else { break };
+            out.push(candidate);
+            sim.record(false);
+        }
+        out
+    }
+
+    /// Принимает результат любого набора, а не только выданного последним:
+    /// ответ на выданный двигает поиск, остальные ложатся в кеш до того
+    /// момента, когда поиск до них дойдёт.
+    pub fn remember(&mut self, active: &[ModId], reproduced: bool) {
+        let key = hash_ids(active);
+        if self.pending.as_ref().is_some_and(|p| hash_ids(&p.active) == key) {
+            self.record(reproduced);
+        } else {
+            self.cache.insert(key, reproduced);
+            self.runs += 1;
+        }
+    }
+
+    /// Известен ли уже ответ для этого набора.
+    pub fn knows(&self, active: &[ModId]) -> bool {
+        self.cache.contains_key(&hash_ids(active))
     }
 
     /// Принимает результат прогона выданного набора.
@@ -786,6 +855,63 @@ mod tests {
             suspects: Vec::new(),
             harmony_hint: None,
         }
+    }
+
+    #[test]
+    fn planned_runs_answer_the_search_ahead_of_time() {
+        // Параллельный прогон: результаты наборов приходят не по порядку,
+        // а поиск должен прийти к тому же ответу за то же число шагов.
+        let names = names(16);
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let cause = ids(&["mod11"]);
+
+        let mut sequential = search(&names);
+        let expected_runs = {
+            let mut runs = 0;
+            while let Some(c) = sequential.next() {
+                let present: HashSet<&ModId> = c.active.iter().collect();
+                sequential.record(cause.iter().all(|m| present.contains(m)));
+                runs += 1;
+            }
+            runs
+        };
+
+        let mut parallel = search(&names);
+        let mut answered = 0;
+        while parallel.next().is_some() {
+            // Два набора за раз; второй — первым по готовности.
+            let plan = parallel.plan(2);
+            for c in plan.iter().rev() {
+                if parallel.knows(&c.active) {
+                    continue;
+                }
+                let present: HashSet<&ModId> = c.active.iter().collect();
+                parallel.remember(&c.active, cause.iter().all(|m| present.contains(m)));
+                answered += 1;
+            }
+            assert!(answered < 500, "поиск не сходится");
+        }
+        assert_eq!(parallel.result(), sequential.result());
+        assert_eq!(parallel.result(), ids(&["mod11"]));
+        // Лишние прогоны возможны, но не больше, чем вдвое.
+        assert!(answered <= 2 * expected_runs, "{answered} против {expected_runs}");
+    }
+
+    #[test]
+    fn a_crashed_run_makes_the_crash_the_target() {
+        let target = Target::from_run(&Verdict::NativeCrash, &[issue("ошибка", "A", 10)]);
+        assert_eq!(target, Target::Crash);
+        assert!(target.matches(&Verdict::NativeCrash, &[]));
+        assert!(!target.matches(&Verdict::LoadedWithErrors, &[issue("ошибка", "A", 10)]));
+    }
+
+    #[test]
+    fn a_run_stopped_on_the_target_counts_as_reproduced() {
+        let target = Target::Cause { key: "A".into(), title: "x".into() };
+        assert!(target.matches(&Verdict::StoppedOnTarget, &[]));
+        assert!(target.found_in(&[issue("x", "A", 1)]));
+        assert!(!target.found_in(&[issue("x", "B", 1)]));
+        assert!(Target::AnyFailure.found_in(&[issue("x", "B", 1)]));
     }
 
     #[test]

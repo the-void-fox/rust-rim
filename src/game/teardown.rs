@@ -8,9 +8,50 @@
 //!
 //! Поэтому процессы ищутся по признакам принадлежности нашему запуску и
 //! снимаются адресно: чужие игры в других префиксах трогать нельзя.
+//!
+//! Надёжнее всего — своя метка в окружении ([`TAG_VAR`]): её наследует вся
+//! цепочка, вплоть до wineserver. По префиксу и пути к exe одного прогона
+//! от другого не отличить, когда их два одновременно, а заодно под раздачу
+//! попала бы и обычная игра игрока в том же префиксе.
 
-use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
+
+/// Переменная окружения с меткой прогона.
+pub const TAG_VAR: &str = "RUSTRIM_RUN";
+
+/// По каким признакам узнавать процессы одного запуска.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Owner {
+    /// Метка в окружении: `RUSTRIM_RUN=<метка>`. Её надо передать команде.
+    Tag(String),
+    /// Префикс и путь к exe — для запусков без метки.
+    Install { prefix: PathBuf, exe: PathBuf },
+}
+
+impl Owner {
+    fn matches(&self, environ: &[u8], cmdline: &[u8]) -> bool {
+        match self {
+            Owner::Tag(tag) => has_tag(environ, tag),
+            Owner::Install { prefix, exe } => belongs_to(
+                environ,
+                cmdline,
+                &prefix.to_string_lossy(),
+                &exe.to_string_lossy(),
+            ),
+        }
+    }
+}
+
+/// Есть ли в окружении процесса `RUSTRIM_RUN=<tag>` — целиком, а не как
+/// начало другой метки.
+pub fn has_tag(environ: &[u8], tag: &str) -> bool {
+    if tag.is_empty() {
+        return false;
+    }
+    let wanted = format!("{TAG_VAR}={tag}");
+    environ.split(|&b| b == 0).any(|var| var == wanted.as_bytes())
+}
 
 /// Относится ли процесс к нашему запуску.
 ///
@@ -34,20 +75,25 @@ pub fn belongs_to(environ: &[u8], cmdline: &[u8], prefix: &str, exe: &str) -> bo
 /// Нужно потому, что завершение процесса-обёртки ничего не означает:
 /// проверено, что umu-run выходит с кодом 0, пока игра продолжает
 /// стартовать (Prepatcher перезапускает её отдельным процессом).
-pub fn any_running(prefix: &Path, exe: &Path) -> bool {
-    let prefix = prefix.to_string_lossy().into_owned();
-    let exe = exe.to_string_lossy().into_owned();
-    !find_targets(&prefix, &exe).is_empty()
+pub fn any_running(owner: &Owner) -> bool {
+    !find_targets(owner).is_empty()
+}
+
+/// Сколько процессорного времени набрали все процессы запуска.
+///
+/// По приросту видно, работает ли игра вообще: зависший на старте запуск
+/// не тратит ни такта, а загрузка с молчащим логом — тратит.
+pub fn cpu_time(owner: &Owner) -> Duration {
+    let ticks: u64 = find_targets(owner).into_iter().map(process_ticks).sum();
+    Duration::from_secs_f64(ticks as f64 / clock_ticks_per_second())
 }
 
 /// Снимает процессы запуска. Возвращает, скольких коснулись.
 ///
 /// Сначала SIGTERM — чтобы wine успел закрыть префикс штатно, — затем
 /// SIGKILL для тех, кто не ушёл.
-pub fn stop(prefix: &Path, exe: &Path) -> usize {
-    let prefix = prefix.to_string_lossy().into_owned();
-    let exe = exe.to_string_lossy().into_owned();
-    let targets = find_targets(&prefix, &exe);
+pub fn stop(owner: &Owner) -> usize {
+    let targets = find_targets(owner);
     if targets.is_empty() {
         return 0;
     }
@@ -56,7 +102,7 @@ pub fn stop(prefix: &Path, exe: &Path) -> usize {
     signal_all(&targets, Signal::Term);
     std::thread::sleep(Duration::from_millis(1500));
 
-    let survivors = find_targets(&prefix, &exe);
+    let survivors = find_targets(owner);
     if !survivors.is_empty() {
         signal_all(&survivors, Signal::Kill);
     }
@@ -86,9 +132,38 @@ fn signal_all(pids: &[i32], signal: Signal) {
 #[cfg(not(unix))]
 fn signal_all(_pids: &[i32], _signal: Signal) {}
 
+/// utime + stime процесса в тиках часов.
+#[cfg(target_os = "linux")]
+fn process_ticks(pid: i32) -> u64 {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return 0 };
+    // Имя процесса в скобках может содержать пробелы — считаем поля после него.
+    let Some((_, rest)) = stat.rsplit_once(')') else { return 0 };
+    let fields: Vec<&str> = rest.split_whitespace().collect();
+    // После «) » идут поля с третьего: utime — 14-е, stime — 15-е.
+    let get = |n: usize| fields.get(n - 3).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+    get(14) + get(15)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_ticks(_pid: i32) -> u64 {
+    0
+}
+
+#[cfg(unix)]
+fn clock_ticks_per_second() -> f64 {
+    // SAFETY: sysconf без побочных эффектов.
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    if hz > 0 { hz as f64 } else { 100.0 }
+}
+
+#[cfg(not(unix))]
+fn clock_ticks_per_second() -> f64 {
+    100.0
+}
+
 /// Ищет в /proc процессы, относящиеся к нашему запуску.
 #[cfg(target_os = "linux")]
-fn find_targets(prefix: &str, exe: &str) -> Vec<i32> {
+fn find_targets(owner: &Owner) -> Vec<i32> {
     let own = std::process::id() as i32;
     let Ok(entries) = std::fs::read_dir("/proc") else { return Vec::new() };
 
@@ -101,7 +176,7 @@ fn find_targets(prefix: &str, exe: &str) -> Vec<i32> {
         }
         let environ = std::fs::read(entry.path().join("environ")).unwrap_or_default();
         let cmdline = std::fs::read(entry.path().join("cmdline")).unwrap_or_default();
-        if belongs_to(&environ, &cmdline, prefix, exe) {
+        if owner.matches(&environ, &cmdline) {
             out.push(pid);
         }
     }
@@ -109,7 +184,7 @@ fn find_targets(prefix: &str, exe: &str) -> Vec<i32> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn find_targets(_prefix: &str, _exe: &str) -> Vec<i32> {
+fn find_targets(_owner: &Owner) -> Vec<i32> {
     Vec::new()
 }
 
@@ -156,6 +231,32 @@ mod tests {
         // Иначе пустая строка совпала бы с любым процессом.
         let environ = env(&["WINEPREFIX=/whatever"]);
         assert!(!belongs_to(&environ, b"anything\0", "", ""));
+    }
+
+    #[test]
+    fn a_tag_matches_only_its_own_run() {
+        // Два прогона одновременно: путь к игре у них общий, метка — нет.
+        let first = env(&["HOME=/home/user", "RUSTRIM_RUN=42-1", "WINEPREFIX=/p"]);
+        let second = env(&["RUSTRIM_RUN=42-12"]);
+        assert!(has_tag(&first, "42-1"));
+        assert!(!has_tag(&second, "42-1"), "метка не должна совпадать по началу");
+        assert!(!has_tag(&first, ""));
+
+        let owner = Owner::Tag("42-1".into());
+        let cmdline = b"umu-run\0/games/RimWorld/RimWorldWin64.exe\0".as_slice();
+        assert!(owner.matches(&first, cmdline));
+        assert!(!owner.matches(&second, cmdline));
+    }
+
+    #[test]
+    fn own_process_ticks_are_readable() {
+        // Хоть сколько-то CPU тест-процесс уже потратил.
+        if cfg!(target_os = "linux") {
+            let mut x = 0u64;
+            for i in 0..5_000_000u64 { x = x.wrapping_add(i * i); }
+            assert!(x > 0);
+            assert!(process_ticks(std::process::id() as i32) > 0);
+        }
     }
 
     #[test]

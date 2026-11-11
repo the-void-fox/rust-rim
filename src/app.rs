@@ -605,7 +605,7 @@ impl RustRim {
         if resp.play_clicked      { self.launch_game(); }
         if resp.check_clicked     { self.revalidate(); self.validation.open = true; }
         if resp.test_clicked      { self.start_test(); }
-        if resp.hunt_clicked      { self.session.start_hunt(&self.db, &self.profile); }
+        if resp.hunt_clicked      { self.session.start_hunt(&self.db, &self.profile, &self.settings); }
         if resp.mark_working      { self.mark_working(); }
         if resp.disable_new       { self.disable_new(); }
     }

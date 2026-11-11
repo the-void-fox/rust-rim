@@ -18,7 +18,7 @@
 mod parser;
 mod attribution;
 
-pub use parser::parse_log;
+pub use parser::{parse_log, NATIVE_CRASH};
 pub use attribution::ModIndex;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

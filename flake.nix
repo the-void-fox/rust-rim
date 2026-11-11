@@ -60,10 +60,12 @@
             install -Dm644 src/assets/icon.png $out/share/pixmaps/rust-rim.png
           '';
 
-          # GUI-приложению нужны рантайм-библиотеки в LD_LIBRARY_PATH
+          # GUI-приложению нужны рантайм-библиотеки в LD_LIBRARY_PATH.
+          # cage — для прогонов теста без окна; системный, если есть, важнее.
           postFixup = ''
             wrapProgram $out/bin/rust-rim \
-              --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath (runtimeLibs pkgs)}
+              --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath (runtimeLibs pkgs)} \
+              --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.cage ]}
           '';
 
           meta = with nixpkgs.lib; {

@@ -159,8 +159,9 @@ pub fn verdict_look(verdict: &Verdict) -> (&'static str, Color32) {
         Verdict::Passed => ("✓", theme::ACTIVE_GREEN),
         Verdict::LoadedWithErrors => ("⚠", theme::WARNING_AMBER),
         Verdict::ErrorStorm => ("⚑", theme::ERROR_RED),
-        Verdict::Crashed { .. } | Verdict::DiedWhileLoading => ("×", theme::ERROR_RED),
-        Verdict::TimedOut => ("⏱", theme::WARNING_AMBER),
+        Verdict::Crashed { .. } | Verdict::DiedWhileLoading | Verdict::NativeCrash => ("×", theme::ERROR_RED),
+        Verdict::TimedOut | Verdict::HungWhileLoading | Verdict::StuckOnStart => ("⏱", theme::WARNING_AMBER),
+        Verdict::StoppedOnTarget => ("⚑", theme::ERROR_RED),
         Verdict::Cancelled => ("■", theme::TEXT_MUTED),
     }
 }
@@ -178,6 +179,10 @@ pub fn verdict_text(verdict: &Verdict) -> String {
             tr("Игра пропала посреди загрузки модов — до карты не дошло").to_string()
         }
         Verdict::TimedOut => tr("Не уложились в отведённое время").to_string(),
+        Verdict::NativeCrash => tr("Игра упала: краш Unity").to_string(),
+        Verdict::HungWhileLoading => tr("Загрузка встала: лог молчит слишком долго").to_string(),
+        Verdict::StuckOnStart => tr("Игра не стартовала: ни лога, ни работы процессора").to_string(),
+        Verdict::StoppedOnTarget => tr("Искомая ошибка появилась — прогон остановлен досрочно").to_string(),
         Verdict::Cancelled => tr("Остановлено").to_string(),
     }
 }
@@ -200,6 +205,20 @@ fn explanation(verdict: &Verdict) -> Option<&'static str> {
             tr("Лог не замолк и не дал повода вынести вердикт за отведённое время. \
              Возможно, сборка очень большая — увеличьте предел или запустите \
              игру вручную и посмотрите, на чём она стоит."),
+        ),
+        Verdict::NativeCrash => Some(
+            tr("Unity упала целиком, дальше игра не шла. Ниже запись «Crash!!!»: \
+             по кадрам её стека видно, в чьём коде это случилось."),
+        ),
+        Verdict::HungWhileLoading => Some(
+            tr("Игра начала грузить моды и замолчала дольше, чем бывает даже на \
+             большой сборке. Обычно это мод, сломавший загрузку так, что игра не \
+             может ни продолжить, ни выйти: смотрите последние записи ниже."),
+        ),
+        Verdict::StuckOnStart => Some(
+            tr("Запуск встал до первой строки лога, и процессы игры не работают. \
+             Так бывает, когда Proton не смог поднять окружение — проверьте, \
+             запускается ли игра обычной кнопкой."),
         ),
         _ => None,
     }
